@@ -128,14 +128,16 @@ class NewApiCore:
         headers = {"Authorization": self.api_access_token}
 
         logger.info(f"[NewAPI Utils] API 请求: {method} {url}")
+        if json_data:
+            logger.info(f"[NewAPI Utils] 请求体: {json_data}")
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.request(method, url, headers=headers, json=json_data, timeout=10.0)
+                logger.info(f"[NewAPI Utils] 响应 HTTP {response.status_code}: {response.text[:500]}")
                 if not response.is_success:
-                    body = response.text[:500]
                     logger.error(
                         f"[NewAPI Utils] API 返回错误 {method} {endpoint}: "
-                        f"HTTP {response.status_code} -> {body}"
+                        f"HTTP {response.status_code} -> {response.text[:500]}"
                     )
                 response.raise_for_status()
                 return response.json()
@@ -152,7 +154,9 @@ class NewApiCore:
         return None
     async def update_api_user(self, user_profile: Dict) -> bool:
         """仅用于更新用户分组等非额度字段（PUT /api/user/ 不支持更新 quota）。"""
+        logger.info(f"[DEBUG] update_api_user payload: {user_profile}")
         response = await self.api_request("PUT", "/api/user/", json_data=user_profile)
+        logger.info(f"[DEBUG] update_api_user response: {response}")
         return response and response.get("success", False)
 
     async def manage_user_quota(self, user_id: int, action: str, value: int) -> bool:
