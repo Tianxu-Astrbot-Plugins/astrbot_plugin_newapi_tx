@@ -18,7 +18,6 @@ class NewApiCore:
         self.db_pool: Optional[aiomysql.Pool] = None
         self.api_base_url = None
         self.api_access_token = None
-        self.api_admin_user_id = "1"
         logger.info("[NewAPI Utils] 核心工具类已实例化，等待异步初始化...")
 
     async def initialize(self) -> bool:
@@ -27,8 +26,11 @@ class NewApiCore:
         
         load_dotenv()
         self.api_base_url = os.getenv("API_BASE_URL")
-        self.api_access_token = os.getenv("API_ACCESS_TOKEN")
-        self.api_admin_user_id = os.getenv("API_ADMIN_USER_ID", "1")
+        raw_token = os.getenv("API_ACCESS_TOKEN", "")
+        # 自动补全 Bearer 前缀（兼容两种写法）
+        if raw_token and not raw_token.lower().startswith("bearer "):
+            raw_token = f"Bearer {raw_token}"
+        self.api_access_token = raw_token
 
         if not self.api_base_url or not self.api_access_token:
             logger.error("[NewAPI Utils] .env 文件中 API 配置不完整！初始化失败。")
@@ -119,16 +121,26 @@ class NewApiCore:
         if not self.api_base_url or not self.api_access_token:
             logger.error("[NewAPI Utils] API 配置未在初始化时成功加载，请求中止。")
             return None
-        
-        url = f"{self.api_base_url}{endpoint}"
-        headers = { "Authorization": self.api_access_token, "New-Api-User": self.api_admin_user_id }
+
+        # 确保 URL 正确拼接（避免双斜杠）
+        base = self.api_base_url.rstrip("/")
+        url = f"{base}{endpoint}"
+        headers = {"Authorization": self.api_access_token}
+
+        logger.info(f"[NewAPI Utils] API 请求: {method} {url}")
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.request(method, url, headers=headers, json=json_data, timeout=10.0)
+                if not response.is_success:
+                    body = response.text[:500]
+                    logger.error(
+                        f"[NewAPI Utils] API 返回错误 {method} {endpoint}: "
+                        f"HTTP {response.status_code} -> {body}"
+                    )
                 response.raise_for_status()
                 return response.json()
         except Exception as e:
-            logger.error(f"[NewAPI Utils] API 请求异常: {e}", exc_info=True)
+            logger.error(f"[NewAPI Utils] API 请求异常 {method} {endpoint}: {e}", exc_info=True)
             return None
 
     # --- 以下所有高级助手方法保持不变 ---
@@ -139,7 +151,14 @@ class NewApiCore:
         if response and response.get("success"): return response.get("data")
         return None
     async def update_api_user(self, user_profile: Dict) -> bool:
+        """仅用于更新用户分组等非额度字段（PUT /api/user/ 不支持更新 quota）。"""
         response = await self.api_request("PUT", "/api/user/", json_data=user_profile)
+        return response and response.get("success", False)
+
+    async def manage_user_quota(self, user_id: int, action: str, value: int) -> bool:
+        """通过 POST /api/user/manage 操作用户额度。action: add_quota, mode: add/subtract/override。"""
+        payload = {"id": user_id, "action": "add_quota", "mode": action, "value": value}
+        response = await self.api_request("POST", "/api/user/manage", json_data=payload)
         return response and response.get("success", False)
     async def insert_binding(self, qq_id: int, website_user_id: int) -> int: return await self.execute_query("INSERT INTO newapi_bindings (qq_id, website_user_id) VALUES (%s, %s)", (qq_id, website_user_id))
     async def delete_binding(self, *, qq_id: Optional[int] = None, website_user_id: Optional[int] = None) -> int:
@@ -214,9 +233,8 @@ class NewApiCore:
             return "API_USER_NOT_FOUND", {}
 
         current_quota = api_user_data.get("quota", 0)
-        api_user_data["quota"] = current_quota + final_quota
-        
-        if not await self.update_api_user(api_user_data):
+
+        if not await self.manage_user_quota(website_user_id, "add", final_quota):
             return "API_UPDATE_FAILED", {}
             
         await self.set_check_in_time(qq_id)
@@ -268,14 +286,17 @@ class NewApiCore:
             return "API_FETCH_FAILED", {"website_user_id": website_user_id}
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
         raw_quota_adjustment = int(display_adjustment * ratio)
-        current_raw_quota = api_user_data.get("quota", 0)
-        new_total_raw_quota = current_raw_quota + raw_quota_adjustment
-        if new_total_raw_quota < 0:
-            new_total_raw_quota = 0
-            logger.warning(f"为用户 {website_user_id} 调整余额后会导致负数，已自动修正为 0。")
-        api_user_data["quota"] = new_total_raw_quota
-        if not await self.update_api_user(api_user_data):
-            return "API_UPDATE_FAILED", {"website_user_id": website_user_id}
+        if raw_quota_adjustment >= 0:
+            if not await self.manage_user_quota(website_user_id, "add", raw_quota_adjustment):
+                return "API_UPDATE_FAILED", {"website_user_id": website_user_id}
+        else:
+            if not await self.manage_user_quota(website_user_id, "subtract", abs(raw_quota_adjustment)):
+                return "API_UPDATE_FAILED", {"website_user_id": website_user_id}
+        # 重新获取最新额度
+        updated_user = await self.get_api_user_data(website_user_id)
+        if not updated_user:
+            return "API_FETCH_FAILED", {"website_user_id": website_user_id}
+        new_total_raw_quota = updated_user.get("quota", 0)
         new_display_quota = new_total_raw_quota / ratio
         return "SUCCESS", {"website_user_id": website_user_id, "new_display_quota": new_display_quota}
     async def get_today_heist_counts_by_qq(self, robber_qq_id: int) -> int:
@@ -315,17 +336,21 @@ class NewApiCore:
                 return False, 0
         if actual_amount <= 0:
             return True, 0
-        from_user["quota"] -= actual_amount
-        update_from_success = await self.update_api_user(from_user)
-        if not update_from_success:
+
+        # 从付款方扣款
+        if not await self.manage_user_quota(from_user_id, "subtract", actual_amount):
             return False, 0
-        to_user["quota"] += actual_amount
-        update_to_success = await self.update_api_user(to_user)
-        if not update_to_success:
-            logger.error(f"Quota transfer failed at receiving end (to_user_id: {to_user_id}). Attempting to roll back deduction for from_user_id: {from_user_id}.")
-            from_user["quota"] += actual_amount
-            rollback_update_success = await self.update_api_user(from_user)
-            if not rollback_update_success:
-                logger.critical(f"CRITICAL FAILURE: Rollback for from_user_id {from_user_id} FAILED. User has lost {actual_amount} quota. Manual intervention required.")
+
+        # 向收款方加款
+        if not await self.manage_user_quota(to_user_id, "add", actual_amount):
+            logger.error(
+                f"Quota transfer failed at receiving end (to_user_id: {to_user_id}). "
+                f"Attempting to roll back deduction for from_user_id: {from_user_id}."
+            )
+            if not await self.manage_user_quota(from_user_id, "add", actual_amount):
+                logger.critical(
+                    f"CRITICAL FAILURE: Rollback for from_user_id {from_user_id} FAILED. "
+                    f"User has lost {actual_amount} quota. Manual intervention required."
+                )
             return False, 0
         return True, actual_amount

@@ -413,8 +413,16 @@ QQ号: {binding['qq_id']}
             target_group = binding_conf.get('binding_group', 'default')
             
             if api_user_data:
-                api_user_data['group'] = target_group
-                update_success = await self.core.update_api_user(api_user_data)
+                # 【修复】只发送后端允许修改的字段，避免 Invalid parameters
+                update_payload = {
+                    "id": website_user_id,
+                    "username": api_user_data.get("username"),
+                    "display_name": api_user_data.get("display_name"),
+                    "role": api_user_data.get("role"),
+                    "status": api_user_data.get("status"),
+                    "group": target_group
+                }
+                update_success = await self.core.update_api_user(update_payload)
                 if not update_success:
                     raise Exception("API group update failed.")
             else:
