@@ -11,39 +11,59 @@ from astrbot.api import logger, AstrBotConfig
 
 class NewApiCore:
     """
-    NewAPI 核心工具类 (最终 .env 混合模式架构)。
+    NewAPI 核心工具类 (插件配置 + .env 双源混合模式架构)。
     """
     def __init__(self, config: AstrBotConfig):
         self.config = config
         self.db_pool: Optional[aiomysql.Pool] = None
         self.api_base_url = None
         self.api_access_token = None
+        self.api_admin_user_id = None
         logger.info("[NewAPI Utils] 核心工具类已实例化，等待异步初始化...")
 
+    @staticmethod
+    def _resolve(config_val, env_val):
+        """解析配置值：插件配置优先，若为空(空字符串/0/None)则回退到 .env 环境变量。"""
+        if isinstance(config_val, str):
+            config_val = config_val.strip()
+        if config_val not in (None, "", 0, False):
+            return config_val
+        return env_val
+
     async def initialize(self) -> bool:
-        """异步初始化，从 .env 加载核心配置、连接数据库并自动建表。"""
+        """异步初始化：同时支持插件配置与 .env，插件配置优先，缺失项回退到 .env，随后连接数据库并自动建表。"""
         logger.info("[NewAPI Utils] 开始执行异步初始化...")
-        
+
+        # 加载 .env 环境变量（作为插件配置的回退来源）
         load_dotenv()
-        self.api_base_url = os.getenv("API_BASE_URL")
-        raw_token = os.getenv("API_ACCESS_TOKEN", "")
+
+        # API 配置：插件配置 > .env
+        api_conf = self.config.get('api_settings', {})
+        self.api_base_url = self._resolve(api_conf.get('api_base_url'), os.getenv("API_BASE_URL"))
+        raw_token = self._resolve(api_conf.get('api_access_token'), os.getenv("API_ACCESS_TOKEN", ""))
+
         # 自动补全 Bearer 前缀（兼容两种写法）
-        if raw_token and not raw_token.lower().startswith("bearer "):
+        if raw_token and not str(raw_token).lower().startswith("bearer "):
             raw_token = f"Bearer {raw_token}"
         self.api_access_token = raw_token
 
+        # 管理员操作用户 ID（预留，供后续管理员操作使用）
+        self.api_admin_user_id = self._resolve(api_conf.get('api_admin_user_id'), os.getenv("API_ADMIN_USER_ID"))
+
         if not self.api_base_url or not self.api_access_token:
-            logger.error("[NewAPI Utils] .env 文件中 API 配置不完整！初始化失败。")
+            logger.error("[NewAPI Utils] API 配置不完整（插件配置与 .env 均未提供）！初始化失败。")
             return False
 
-        db_host = os.getenv("DB_HOST")
-        db_port = os.getenv("DB_PORT")
-        db_user = os.getenv("DB_USER")
-        db_pass = os.getenv("DB_PASS")
-        db_name = os.getenv("DB_NAME")
-        
+        # 数据库配置：插件配置 > .env
+        db_conf = self.config.get('database_settings', {})
+        db_host = self._resolve(db_conf.get('host'), os.getenv("DB_HOST"))
+        db_port = self._resolve(db_conf.get('port'), os.getenv("DB_PORT"))
+        db_user = self._resolve(db_conf.get('user'), os.getenv("DB_USER"))
+        db_pass = self._resolve(db_conf.get('password'), os.getenv("DB_PASS"))
+        db_name = self._resolve(db_conf.get('name'), os.getenv("DB_NAME"))
+
         if not all([db_host, db_port, db_user, db_name]):
-            logger.error("[NewAPI Utils] .env 文件中数据库配置不完整！初始化失败。")
+            logger.error("[NewAPI Utils] 数据库配置不完整（插件配置与 .env 均未提供）！初始化失败。")
             return False
             
         try:
@@ -52,7 +72,7 @@ class NewApiCore:
                 user=db_user, password=db_pass,
                 db=db_name, autocommit=True
             )
-            logger.info("[NewAPI Utils] 数据库连接池已根据 .env 配置成功建立。")
+            logger.info("[NewAPI Utils] 数据库连接池已成功建立。")
 
             # 【修改】召唤数据库管家，执行建表仪式
             if not await self._ensure_tables_exist():
