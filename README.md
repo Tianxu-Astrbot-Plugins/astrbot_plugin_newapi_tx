@@ -84,4 +84,4 @@ API_ADMIN_USER_ID=1
 4.  在群内发送一条通知，宣告净化仪式完成。
 
 ---
-Future-404
+Tianxu-Astrbot-Plugins
