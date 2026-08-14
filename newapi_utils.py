@@ -165,6 +165,20 @@ class NewApiCore:
             logger.error(f"[NewAPI Utils] API 请求异常 {method} {endpoint}: {e}", exc_info=True)
             return None
 
+    async def check_api_connection(self) -> bool:
+        """检测 New API 网站连接状态（查询管理员用户余额，查得即成功）。"""
+        admin_id = self.api_admin_user_id
+        if admin_id in (None, 0, "0", ""):
+            logger.error("[NewAPI Utils] 未配置管理员用户 ID，无法检测 New API 连接。")
+            return False
+        try:
+            admin_id = int(admin_id)
+        except (TypeError, ValueError):
+            logger.error(f"[NewAPI Utils] 管理员用户 ID 无效: {admin_id}，无法检测 New API 连接。")
+            return False
+        api_user_data = await self.get_api_user_data(admin_id)
+        return api_user_data is not None
+
     # --- 以下所有高级助手方法保持不变 ---
     async def get_user_by_qq(self, qq_id: int) -> Optional[Dict]: return await self.execute_query("SELECT * FROM newapi_bindings WHERE qq_id = %s", (qq_id,), fetch='one')
     async def get_user_by_website_id(self, website_user_id: int) -> Optional[Dict]: return await self.execute_query("SELECT * FROM newapi_bindings WHERE website_user_id = %s", (website_user_id,), fetch='one')

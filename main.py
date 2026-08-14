@@ -65,11 +65,13 @@ class NewApiSuitePlugin(Star):
     
     @filter.command("pingapi")
     async def handle_ping_command(self, event: AstrMessageEvent):
-        """响应ping命令，并报告数据库状态。"""
+        """响应ping命令，并报告数据库与 New API 连接状态。"""
         db_status = "✅ 已连接" if self.core.db_pool is not None else "❌ 连接失败"
+        api_status = "✅ 已连接" if await self.core.check_api_connection() else "❌ 连接失败"
         reply = f"""🎉 Pong! NewAPI 插件套件 V1.1.0 正在运行！
 --------------------
-数据库状态: {db_status}"""
+数据库状态: {db_status}
+New API 状态: {api_status}"""
         yield event.plain_result(reply)
 
     @filter.command("查询余额")
@@ -93,6 +95,33 @@ class NewApiSuitePlugin(Star):
 您绑定的网站ID: {website_user_id}
 当前剩余额度: {display_quota:.2f}"""
         
+        yield event.plain_result(reply)
+
+    @filter.command("查余额")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def handle_query_other_balance(self, event: AstrMessageEvent, identifier: int):
+        """(管理员) 智能识别网站ID或QQ号，查询其网站余额。"""
+        id_type, binding = await self.core.lookup_binding(identifier)
+        if id_type == "NOT_FOUND":
+            yield event.plain_result(f"❌ 查询失败：未在绑定记录中找到与 {identifier} 相关的任何信息。")
+            return
+
+        website_user_id = binding['website_user_id']
+        api_user_data = await self.core.get_api_user_data(website_user_id)
+        if not api_user_data:
+            yield event.plain_result("查询失败，无法从网站获取该用户的余额信息。请稍后再试或联系管理员。")
+            return
+
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
+        display_quota = api_user_data.get("quota", 0) / ratio
+        label = "网站ID" if id_type == "WEBSITE_ID" else "QQ号"
+
+        reply = f"""✅ 查询成功！
+--------------------
+输入类型: {label}
+{label}: {identifier}
+绑定的网站ID: {website_user_id}
+当前剩余额度: {display_quota:.2f}"""
         yield event.plain_result(reply)
 
     @filter.command("绑定")
