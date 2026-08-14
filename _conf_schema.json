@@ -1,4 +1,24 @@
 {
+    "api_settings": {
+        "description": "New API 网站配置（留空则回退到 .env 文件）",
+        "type": "object",
+        "items": {
+            "api_base_url": { "description": "New API 网站地址（结尾不带 /），留空则使用 .env", "type": "string", "default": "" },
+            "api_access_token": { "description": "New API 后台生成的令牌，留空则使用 .env", "type": "string", "default": "" },
+            "api_admin_user_id": { "description": "执行管理员操作时使用的用户 ID，留空则使用 .env", "type": "int", "default": 0 }
+        }
+    },
+    "database_settings": {
+        "description": "数据库配置（留空则回退到 .env 文件）",
+        "type": "object",
+        "items": {
+            "host": { "description": "数据库主机地址，留空则使用 .env", "type": "string", "default": "" },
+            "port": { "description": "数据库端口，0 表示使用 .env", "type": "int", "default": 0 },
+            "user": { "description": "数据库用户名，留空则使用 .env", "type": "string", "default": "" },
+            "password": { "description": "数据库密码，留空则使用 .env", "type": "string", "default": "" },
+            "name": { "description": "数据库名称，留空则使用 .env", "type": "string", "default": "" }
+        }
+    },
     "binding_settings": {
         "description": "核心绑定功能",
         "type": "object",
