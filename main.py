@@ -116,7 +116,7 @@ New API 状态: {api_status}"""
         reply = f"""查询成功！
 --------------------
 您绑定的网站ID: {website_user_id}
-当前剩余额度: {display_quota:.2f}"""
+当前剩余额度: {display_quota:.6f}"""
         
         yield event.plain_result(reply)
 
@@ -144,7 +144,7 @@ New API 状态: {api_status}"""
 输入类型: {label}
 {label}: {identifier}
 绑定的网站ID: {website_user_id}
-当前剩余额度: {display_quota:.2f}"""
+当前剩余额度: {display_quota:.6f}"""
         yield event.plain_result(reply)
 
     @filter.command("绑定")
@@ -195,8 +195,8 @@ New API 状态: {api_status}"""
                     template = check_in_conf.get('check_in_success_template')
                 
                 reply = template.format(
-                    display_added=f"{details['display_added']:.2f}", 
-                    display_total=f"{details['display_total']:.2f}",
+                    display_added=f"{details['display_added']:.6f}", 
+                    display_total=f"{details['display_total']:.6f}",
                     user_qq=details['user_qq'],
                     site_id=details['site_id']
                 )
@@ -275,8 +275,8 @@ QQ号: {binding['qq_id']}
                 reply = f"""✅ 操作成功！
 --------------------
 目标用户ID: {details['website_user_id']}
-已为其{action_text}显示额度: {abs(display_adjustment):.2f}
-该用户当前总显示额度为: {details['new_display_quota']:.2f}"""
+已为其{action_text}显示额度: {abs(display_adjustment):.6f}
+该用户当前总显示额度为: {details['new_display_quota']:.6f}"""
             case "USER_NOT_FOUND":
                 reply = f"❌ 操作失败：未在绑定记录中找到与 {identifier} 相关的用户。"
             case "API_FETCH_FAILED":
