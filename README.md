@@ -2,7 +2,7 @@
 
 > `astrbot_plugin_newapi_tx` 是独立维护的 **New API 网站 × QQ 群联动插件**，为 [AstrBot](https://github.com/he0119/AstrBot) 打造，集用户绑定、额度经济、群聊娱乐、管理员工具于一体，并内置退群自动解绑与账号净化能力。
 
-本仓库由 [Tianxu-Astrbot-Plugins](https://github.com/Tianxu-Astrbot-Plugins) 独立维护，非第三方 Fork，功能与配置均以本仓库为准。
+本仓库由 [Tianxu-Astrbot-Plugins](https://github.com/Tianxu-Astrbot-Plugins) 独立维护，功能与配置均以本仓库为准。
 
 ## ✨ 功能特性
 

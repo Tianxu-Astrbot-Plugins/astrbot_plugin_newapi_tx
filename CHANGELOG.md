@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.10] - 2026-08-17
+
+### 新增
+- 用户黑名单：在网站ID黑名单下方新增 `forbidden_user_ids`（禁止绑定的用户QQ列表），仅拦截新增绑定，已绑定不受影响。
+
 ## [1.0.9] - 2026-08-17
 
 ### 新增

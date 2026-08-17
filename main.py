@@ -155,6 +155,7 @@ New API 状态: {api_status}"""
         error_message = (
             await self._check_self_binding(user_qq_id) or
             await self._check_qq_level(event, user_qq_id) or
+            await self._check_user_blacklist(user_qq_id) or
             await self._check_website_id_blacklist(website_user_id) or
             await self._check_api_user_exists(website_user_id) or
             await self._check_id_uniqueness(website_user_id)
@@ -455,6 +456,15 @@ QQ号: {binding['qq_id']}
         forbidden_ids = set(int(i) for i in blacklist if str(i).lstrip('-').isdigit())
         if website_user_id in forbidden_ids:
             return f"审核失败：网站ID {website_user_id} 已被管理员列入禁止绑定名单，无法绑定。"
+        return None
+
+    async def _check_user_blacklist(self, user_qq_id: int) -> Optional[str]:
+        """检查用户QQ是否在禁止绑定黑名单中（仅针对新增绑定，已绑定不受影响）。"""
+        binding_conf = self.config.get('binding_settings', {})
+        blacklist = binding_conf.get('forbidden_user_ids', [])
+        forbidden_ids = set(int(i) for i in blacklist if str(i).lstrip('-').isdigit())
+        if user_qq_id in forbidden_ids:
+            return f"审核失败：您的QQ {user_qq_id} 已被管理员列入禁止绑定名单，无法绑定。"
         return None
 
     async def _check_id_uniqueness(self, website_user_id: int) -> Optional[str]:
