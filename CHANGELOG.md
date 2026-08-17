@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.9] - 2026-08-17
+
+### 新增
+- 绑定黑名单：管理员可在 WebUI 配置 `forbidden_website_ids`（禁止绑定的网站ID列表），仅拦截新增绑定，已绑定不受影响。
+
 ## [1.0.8] - 2026-08-17
 
 ### 新增

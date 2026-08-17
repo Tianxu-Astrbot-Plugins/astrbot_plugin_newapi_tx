@@ -25,7 +25,8 @@
         "items": {
             "binding_group": { "description": "绑定后自动设置的用户组", "type": "string", "default": "default" },
             "min_qq_level": { "description": "允许绑定的最低QQ等级", "type": "int", "default": 16 },
-            "quota_display_ratio": { "description": "额度显示汇率 (原始Quota / 此值)", "type": "int", "default": 500000 }
+            "quota_display_ratio": { "description": "额度显示汇率 (原始Quota / 此值)", "type": "int", "default": 500000 },
+            "forbidden_website_ids": { "description": "禁止绑定的网站ID黑名单（仅拦截新增绑定，已绑定不受影响）", "type": "list", "default": [] }
         }
     },
     "check_in_settings": {
