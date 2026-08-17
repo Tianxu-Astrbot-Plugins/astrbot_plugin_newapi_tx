@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.7] - 2026-08-17
+
+### 变更
+- 整体重写 `README.md`：突出本插件为独立维护版本（非第三方 Fork），与旧版 Fork 文档区分；统一插件目录名 `astrbot_plugin_newapi_tx`，补充指令大全、版本与更新日志说明。
+
 ## [1.0.6] - 2026-08-17
 
 ### 新增
