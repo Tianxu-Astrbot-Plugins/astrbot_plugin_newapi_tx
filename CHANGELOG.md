@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.8] - 2026-08-17
+
+### 新增
+- 签到余额衰减功能：余额超过阈值后，签到随机额度最大值每超一档减半，最低值保持不变（可在 WebUI 通过 `diminish_enabled` / `diminish_threshold` 配置）。
+
 ## [1.0.7] - 2026-08-17
 
 ### 变更

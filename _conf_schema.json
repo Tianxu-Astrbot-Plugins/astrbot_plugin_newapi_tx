@@ -37,6 +37,8 @@
             "min_display_quota": { "description": "每日签到可获得的最小显示额度", "type": "float", "default": 1500 },
             "max_display_quota": { "description": "每日签到可获得的最大显示额度", "type": "float", "default": 1500 },
             "double_chance": { "description": "触发翻倍奖励的概率", "type": "float", "default": 0.1 },
+            "diminish_enabled": { "description": "是否启用余额衰减（余额越多，签到最大值每超一档减半，最低值不变）", "type": "bool", "default": false },
+            "diminish_threshold": { "description": "余额衰减阈值（显示额度），超过此值后开始按档位减半", "type": "float", "default": 10000.0 },
             "first_check_in_bonus_enabled": { "description": "是否发放首次签到奖励", "type": "bool", "default": true },
             "first_check_in_bonus_display_quota": { "description": "首次签到额外奖励的显示额度", "type": "float", "default": 2 },
             "check_in_success_template": { "description": "签到成功的消息模板", "type": "text", "default": "签到成功！您获得了 {display_added} 额度，当前剩余总额度为 {display_total}。" },

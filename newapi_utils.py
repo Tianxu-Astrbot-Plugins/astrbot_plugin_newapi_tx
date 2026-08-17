@@ -240,6 +240,8 @@ class NewApiCore:
         double_chance = check_in_conf.get('double_chance', 0.0)
         min_display_q = check_in_conf.get('min_display_quota', 0)
         max_display_q = check_in_conf.get('max_display_quota', 0)
+        diminish_enabled = check_in_conf.get('diminish_enabled', False)
+        diminish_threshold = check_in_conf.get('diminish_threshold', 0)
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
         # --- 缓存结束 ---
 
@@ -253,6 +255,24 @@ class NewApiCore:
             if local_last_check_in_date == local_today:
                 return "ALREADY_CHECKED_IN", {}
 
+        website_user_id = binding['website_user_id']
+        api_user_data = await self.get_api_user_data(website_user_id)
+        if not api_user_data:
+            return "API_USER_NOT_FOUND", {}
+
+        current_quota = api_user_data.get("quota", 0)
+
+        # --- 余额衰减：余额越多，签到最大值每超一档减半，最低值不动 ---
+        if diminish_enabled and diminish_threshold > 0:
+            current_display = current_quota / ratio
+            if current_display > diminish_threshold:
+                # 档位 = 余额超过阈值的倍数（向下取整），如超1倍为第1档、2倍为第2档
+                tier = int(current_display / diminish_threshold)
+                shrunk_max = max_display_q / (2 ** tier)
+                # 最大值衰减后不得低于最小值（保底最低值）
+                max_display_q = max(shrunk_max, min_display_q)
+        # --- 衰减结束 ---
+
         bonus_quota = 0
         is_doubled = False
         if is_first_check_in and first_bonus_enabled:
@@ -264,13 +284,6 @@ class NewApiCore:
         base_quota = int(base_display_quota * ratio)
         regular_quota = base_quota * 2 if is_doubled else base_quota
         final_quota = regular_quota + bonus_quota
-
-        website_user_id = binding['website_user_id']
-        api_user_data = await self.get_api_user_data(website_user_id)
-        if not api_user_data:
-            return "API_USER_NOT_FOUND", {}
-
-        current_quota = api_user_data.get("quota", 0)
 
         if not await self.manage_user_quota(website_user_id, "add", final_quota):
             return "API_UPDATE_FAILED", {}
