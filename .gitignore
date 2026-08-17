@@ -209,3 +209,16 @@ __marimo__/
 
 
 awa
+
+# --- 本地工具与环境（不应提交） ---
+# 本地安装的 Python / uv 等工具目录（若放在工作区内）
+.tools/
+# Python 虚拟环境
+.venv/
+venv/
+env/
+# uv 本地缓存与锁文件
+.uv-cache/
+uv-cache/
+# 本地工具入口
+bin/

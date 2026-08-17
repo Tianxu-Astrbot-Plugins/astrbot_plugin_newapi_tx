@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Tuple
 from functools import wraps
 from astrbot.api import logger, AstrBotConfig
@@ -8,6 +9,28 @@ from astrbot.api.message_components import At
 
 from .newapi_utils import NewApiCore
 from .heist_logic import HeistLogic
+
+def load_plugin_version() -> str:
+    """
+    从插件根目录的 metadata.yaml 读取 version 字段，
+    作为本插件的唯一版本来源，避免主代码中硬编码版本号。
+    """
+    try:
+        metadata_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "metadata.yaml"
+        )
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith("version:"):
+                    version = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+                    if version:
+                        return version
+    except Exception as e:
+        logger.warning(f"读取 metadata.yaml 版本号失败，使用默认版本: {e}")
+    return "1.0.4"
+
+PLUGIN_VERSION = load_plugin_version()
 
 def require_binding(f):
     """
@@ -41,7 +64,7 @@ def require_binding(f):
     "NewAPI_plugin",
     "Future-404",
     "集成了核心用户管理与娱乐功能的New API插件套件。",
-    "1.1.0"
+    PLUGIN_VERSION
 )
 class NewApiSuitePlugin(Star):
     """
@@ -68,7 +91,7 @@ class NewApiSuitePlugin(Star):
         """响应ping命令，并报告数据库与 New API 连接状态。"""
         db_status = "✅ 已连接" if self.core.db_pool is not None else "❌ 连接失败"
         api_status = "✅ 已连接" if await self.core.check_api_connection() else "❌ 连接失败"
-        reply = f"""🎉 Pong! NewAPI 插件套件 V1.1.0 正在运行！
+        reply = f"""🎉 Pong! NewAPI 插件套件 V{PLUGIN_VERSION} 正在运行！
 --------------------
 数据库状态: {db_status}
 New API 状态: {api_status}"""
