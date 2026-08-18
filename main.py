@@ -92,10 +92,11 @@ class NewApiSuitePlugin(Star):
     @filter.command("pingapi")
     async def handle_ping_command(self, event: AstrMessageEvent):
         """响应ping命令，并报告数据库与 New API 连接状态。"""
-        db_status = "✅ 已连接" if self.core.db_pool is not None else "❌ 连接失败"
+        db_status = "✅ 已连接" if self.core.is_db_ready() else "❌ 连接失败"
         api_status = "✅ 已连接" if await self.core.check_api_connection() else "❌ 连接失败"
         reply = f"""🎉 Pong! NewAPI 插件套件 V{PLUGIN_VERSION} 正在运行！
 --------------------
+数据库引擎: {'SQLite' if self.core.db_mode == 'sqlite' else 'MySQL'}
 数据库状态: {db_status}
 New API 状态: {api_status}"""
         yield event.plain_result(reply)

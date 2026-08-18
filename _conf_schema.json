@@ -9,14 +9,21 @@
         }
     },
     "database_settings": {
-        "description": "数据库配置（留空则回退到 .env 文件）",
+        "description": "数据库（MySQL）（留空则回退到 .env 文件）",
         "type": "object",
         "items": {
-            "host": { "description": "数据库主机地址，留空则使用 .env", "type": "string", "default": "" },
-            "port": { "description": "数据库端口，0 表示使用 .env", "type": "int", "default": 0 },
-            "user": { "description": "数据库用户名，留空则使用 .env", "type": "string", "default": "" },
-            "password": { "description": "数据库密码，留空则使用 .env", "type": "string", "default": "" },
-            "name": { "description": "数据库名称，留空则使用 .env", "type": "string", "default": "" }
+            "host": { "description": "MySQL 主机地址，留空则使用 .env", "type": "string", "default": "" },
+            "port": { "description": "MySQL 端口，0 表示使用 .env", "type": "int", "default": 0 },
+            "user": { "description": "MySQL 用户名，留空则使用 .env", "type": "string", "default": "" },
+            "password": { "description": "MySQL 密码，留空则使用 .env", "type": "string", "default": "" },
+            "name": { "description": "MySQL 数据库名称，留空则使用 .env", "type": "string", "default": "" }
+        }
+    },
+    "sqlite_settings": {
+        "description": "SQLite 模式（⚠️ SQLite 与 MySQL 为两套独立数据，切换模式不会自动迁移，需重新绑定）",
+        "type": "object",
+        "items": {
+            "use_sqlite_mode": { "description": "启用后使用 SQLite 单文件存储绑定与打劫日志，不再连接 MySQL（开启后上方 MySQL 数据库配置将被忽略）", "type": "bool", "default": false }
         }
     },
     "binding_settings": {

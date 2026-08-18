@@ -54,6 +54,15 @@ API_ADMIN_USER_ID=1
 
 > 插件启动时会自动创建所需数据表，无需手动建表。
 
+### 🗄️ 单 SQLite 模式（可选）
+
+不想维护 MySQL 的轻量用户，可在 WebUI → **`SQLite 模式`** 板块中开启 **`use_sqlite_mode`** 开关。开启后：
+
+- 不再使用 MySQL，绑定与打劫日志等数据存储在插件目录的 SQLite 单文件数据库中（`{AstrBot数据目录}/plugin_data/astrbot_plugin_newapi_tx/newapi.db`），自动建表、零配置。
+- MySQL 相关配置（主机/端口/用户/密码/库名及 `.env` 中的 `DB_*`）全部忽略。
+
+> ⚠️ **注意**：SQLite 模式与 MySQL 模式是**两套独立数据**，切换模式不会自动迁移已有绑定数据；如从 MySQL 切换到 SQLite，已绑定的用户需要**重新绑定**。
+
 ## 📜 指令大全
 
 ### 用户指令
