@@ -137,7 +137,8 @@
         "items": {
             "enabled": { "description": "是否启用消耗排行榜功能（依赖 New API 的消耗日志，若未开启记录则榜单为空）", "type": "bool", "default": false },
             "top_n": { "description": "消耗榜显示的名次数量", "type": "int", "default": 10 },
-            "window_hours": { "description": "统计的时间窗口（小时）", "type": "int", "default": 24 }
+            "window_hours": { "description": "统计的时间窗口（小时）", "type": "int", "default": 24 },
+            "show_quota": { "description": "是否在每行额外显示网站额度消耗", "type": "bool", "default": false }
         }
     },
     "optional_pm_settings": {
