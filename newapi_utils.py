@@ -177,12 +177,27 @@ class NewApiCore:
             await self.execute_query("""
             CREATE TABLE IF NOT EXISTS `newapi_check_in_state` (
               `id` int(11) NOT NULL AUTO_INCREMENT,
-              `qq_id` bigint(20) NOT NULL,
+              `website_user_id` int(11) NOT NULL,
               `last_check_in_time` timestamp NULL DEFAULT NULL,
               PRIMARY KEY (`id`),
-              UNIQUE KEY `qq_id` (`qq_id`)
+              UNIQUE KEY `website_user_id` (`website_user_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
+            # 【迁移】兼容 1.0.17 按 qq_id 建的表，自动重建为按 website_user_id
+            cols = await self.execute_query("SHOW COLUMNS FROM `newapi_check_in_state`", fetch='all')
+            col_names = {c['Field'] for c in cols} if cols else set()
+            if col_names and 'website_user_id' not in col_names:
+                logger.warning("[NewAPI Utils] 检测到旧版签到状态表(以 qq_id 为键)，自动重建为 website_user_id。")
+                await self.execute_query("DROP TABLE `newapi_check_in_state`")
+                await self.execute_query("""
+                CREATE TABLE IF NOT EXISTS `newapi_check_in_state` (
+                  `id` int(11) NOT NULL AUTO_INCREMENT,
+                  `website_user_id` int(11) NOT NULL,
+                  `last_check_in_time` timestamp NULL DEFAULT NULL,
+                  PRIMARY KEY (`id`),
+                  UNIQUE KEY `website_user_id` (`website_user_id`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                """)
             logger.info("[NewAPI Utils] MySQL 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -215,10 +230,23 @@ class NewApiCore:
             await self._execute_sqlite("""
             CREATE TABLE IF NOT EXISTS newapi_check_in_state (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
-              qq_id INTEGER NOT NULL UNIQUE,
+              website_user_id INTEGER NOT NULL UNIQUE,
               last_check_in_time TEXT
             );
             """)
+            # 【迁移】兼容 1.0.17 按 qq_id 建的表，自动重建为按 website_user_id
+            cols = await self._execute_sqlite("PRAGMA table_info(newapi_check_in_state)", fetch='all')
+            col_names = {c['name'] for c in cols} if cols else set()
+            if col_names and 'website_user_id' not in col_names:
+                logger.warning("[NewAPI Utils] 检测到旧版签到状态表(以 qq_id 为键)，自动重建为 website_user_id。")
+                await self._execute_sqlite("DROP TABLE newapi_check_in_state")
+                await self._execute_sqlite("""
+                CREATE TABLE IF NOT EXISTS newapi_check_in_state (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  website_user_id INTEGER NOT NULL UNIQUE,
+                  last_check_in_time TEXT
+                );
+                """)
             logger.info("[NewAPI Utils] SQLite 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -402,25 +430,25 @@ class NewApiCore:
             )
         return 0
 
-    async def get_check_in_state(self, qq_id: int) -> Optional[Dict]:
-        """获取指定 QQ 的持久化签到状态（退群/解绑不会清除，防止刷新人礼包与重复签到）。"""
+    async def get_check_in_state(self, website_user_id: int) -> Optional[Dict]:
+        """获取指定网站账号的持久化签到状态（按网站用户去重，防止多 QQ 轮流绑同一账号刷礼包与重复签到）。"""
         return await self.execute_query(
-            "SELECT * FROM newapi_check_in_state WHERE qq_id = %s", (qq_id,), fetch='one'
+            "SELECT * FROM newapi_check_in_state WHERE website_user_id = %s", (website_user_id,), fetch='one'
         )
 
-    async def set_check_in_time(self, qq_id: int) -> int:
-        """写入/更新指定 QQ 的签到时间到独立状态表（跨引擎 upsert）。"""
+    async def set_check_in_time(self, website_user_id: int) -> int:
+        """写入/更新指定网站账号的签到时间到独立状态表（跨引擎 upsert）。"""
         # datetime.utcnow() 存储为字符串以兼容 SQLite
         now_str = self._format_datetime_for_sqlite(datetime.utcnow())
-        existing = await self.get_check_in_state(qq_id)
+        existing = await self.get_check_in_state(website_user_id)
         if existing:
             return await self.execute_query(
-                "UPDATE newapi_check_in_state SET last_check_in_time = %s WHERE qq_id = %s",
-                (now_str, qq_id)
+                "UPDATE newapi_check_in_state SET last_check_in_time = %s WHERE website_user_id = %s",
+                (now_str, website_user_id)
             )
         return await self.execute_query(
-            "INSERT INTO newapi_check_in_state (qq_id, last_check_in_time) VALUES (%s, %s)",
-            (qq_id, now_str)
+            "INSERT INTO newapi_check_in_state (website_user_id, last_check_in_time) VALUES (%s, %s)",
+            (website_user_id, now_str)
         )
 
     async def revert_user_group(self, website_user_id: int) -> bool:
@@ -471,9 +499,10 @@ class NewApiCore:
 
         time_delta = timedelta(hours=offset_hours)
         local_today = (datetime.utcnow() + time_delta).date()
-        # 【修复】签到时间从持久化状态表读取（退群/解绑不会清除）。
+        # 签到时间按【网站用户】持久化：退群/解绑不清除，且防止多个 QQ 轮流绑定同一网站账号刷礼包与重复签到。
         # 兼容旧数据：状态表无记录时回退到绑定记录上的 last_check_in_time，实现一次性迁移。
-        state = await self.get_check_in_state(qq_id)
+        website_user_id = binding['website_user_id']
+        state = await self.get_check_in_state(website_user_id)
         last_check_in_time = state.get('last_check_in_time') if state else binding.get('last_check_in_time')
         is_first_check_in = last_check_in_time is None
 
@@ -482,7 +511,6 @@ class NewApiCore:
             if local_last_check_in_date == local_today:
                 return "ALREADY_CHECKED_IN", {}
 
-        website_user_id = binding['website_user_id']
         api_user_data = await self.get_api_user_data(website_user_id)
         if not api_user_data:
             return "API_USER_NOT_FOUND", {}
@@ -511,7 +539,7 @@ class NewApiCore:
         if not await self.manage_user_quota(website_user_id, "add", final_quota):
             return "API_UPDATE_FAILED", {}
 
-        await self.set_check_in_time(qq_id)
+        await self.set_check_in_time(website_user_id)
 
         display_added = final_quota / ratio
         display_total = (current_quota + final_quota) / ratio
