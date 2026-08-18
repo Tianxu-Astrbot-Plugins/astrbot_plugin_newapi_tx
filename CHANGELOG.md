@@ -4,6 +4,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.16] - 2026-08-19
+
+### 修复
+- 解绑/退群净化时用户组恢复失败：`revert_user_group` 原先将 GET 返回的完整用户对象（含 quota/password 等）原样 PUT 回 `/api/user/`，会被 New API 以 Invalid parameters 拒绝，导致用户组静默恢复失败。现与绑定仪式一致，只发送允许修改的字段（id/username/display_name/role/status/group）。
+- 解绑后重新绑定报 "API group update failed"：绑定仪式在用户当前组已等于目标组时不再发送无意义的 no-op PUT，直接跳过用户组更新。
+
+## [1.0.15] - 2026-08-18
+
+### 新增
+- 单 SQLite 模式：于独立 `sqlite_settings` 板块中开启 `use_sqlite_mode` 开关后，绑定与打劫日志存储于 `{AstrBot数据目录}/plugin_data/astrbot_plugin_newapi_tx/newapi.db` 单文件数据库（WAL 模式，自动建表），不再依赖 MySQL；`database_settings` 与 `.env` 中的 MySQL 配置将被忽略。⚠️ SQLite 与 MySQL 为两套独立数据，切换模式不会自动迁移，需重新绑定。
+- `/pingapi` 响应新增「数据库引擎」行，显示当前使用 SQLite 还是 MySQL。
+
 ## [1.0.14] - 2026-08-17
 
 ### 变更

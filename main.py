@@ -585,18 +585,22 @@ QQ号: {binding['qq_id']}
             target_group = binding_conf.get('binding_group', 'default')
             
             if api_user_data:
-                # 【修复】只发送后端允许修改的字段，避免 Invalid parameters
-                update_payload = {
-                    "id": website_user_id,
-                    "username": api_user_data.get("username"),
-                    "display_name": api_user_data.get("display_name"),
-                    "role": api_user_data.get("role"),
-                    "status": api_user_data.get("status"),
-                    "group": target_group
-                }
-                update_success = await self.core.update_api_user(update_payload)
-                if not update_success:
-                    raise Exception("API group update failed.")
+                if api_user_data.get('group') == target_group:
+                    # 【修复】用户已在目标组中，跳过无意义的 PUT，避免重绑时 no-op 更新被拒
+                    logger.info(f"网站用户 {website_user_id} 已在目标组 {target_group} 中，跳过用户组更新。")
+                else:
+                    # 【修复】只发送后端允许修改的字段，避免 Invalid parameters
+                    update_payload = {
+                        "id": website_user_id,
+                        "username": api_user_data.get("username"),
+                        "display_name": api_user_data.get("display_name"),
+                        "role": api_user_data.get("role"),
+                        "status": api_user_data.get("status"),
+                        "group": target_group
+                    }
+                    update_success = await self.core.update_api_user(update_payload)
+                    if not update_success:
+                        raise Exception("API group update failed.")
             else:
                 raise Exception("API user data not found during binding ritual.")
 

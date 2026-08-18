@@ -399,16 +399,24 @@ class NewApiCore:
             return False
         leave_conf = self.config.get('group_leave_settings', {})
         revert_group = leave_conf.get('revert_group_on_leave', 'default')
-        if api_user_data.get('group') != revert_group:
-            api_user_data['group'] = revert_group
-            update_success = await self.update_api_user(api_user_data)
-            if update_success:
-                logger.info(f"成功将网站用户 {website_user_id} 恢复至用户组: {revert_group}")
-            else:
-                logger.error(f"尝试恢复网站用户 {website_user_id} 至用户组 {revert_group} 时失败。")
-            return update_success
-        logger.info(f"网站用户 {website_user_id} 已在目标恢复组 {revert_group} 中，无需操作。")
-        return True
+        if api_user_data.get('group') == revert_group:
+            logger.info(f"网站用户 {website_user_id} 已在目标恢复组 {revert_group} 中，无需操作。")
+            return True
+        # 【修复】与绑定仪式一致，只发送后端允许修改的字段，避免全量对象 PUT 被拒绝 (Invalid parameters)
+        update_payload = {
+            "id": website_user_id,
+            "username": api_user_data.get("username"),
+            "display_name": api_user_data.get("display_name"),
+            "role": api_user_data.get("role"),
+            "status": api_user_data.get("status"),
+            "group": revert_group
+        }
+        update_success = await self.update_api_user(update_payload)
+        if update_success:
+            logger.info(f"成功将网站用户 {website_user_id} 恢复至用户组: {revert_group}")
+        else:
+            logger.error(f"尝试恢复网站用户 {website_user_id} 至用户组 {revert_group} 时失败。")
+        return update_success
 
     async def perform_check_in(self, qq_id: int, binding: Optional[Dict] = None) -> Tuple[str, Dict[str, Any]]:
         check_in_conf = self.config.get('check_in_settings', {})
