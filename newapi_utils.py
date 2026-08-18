@@ -405,8 +405,8 @@ class NewApiCore:
         """聚合近 N 小时全站消耗日志（type=2），按网站用户 ID 汇总 token 消耗。
 
         通过 New API 后台接口 GET /api/log/ 分页拉取并聚合，返回：
-            [{"user_id": int, "username": str, "tokens": int}, ...]
-        其中 tokens = prompt_tokens + completion_tokens。失败返回 None。
+            [{"user_id": int, "username": str, "tokens": int, "quota": int}, ...]
+        其中 tokens = prompt_tokens + completion_tokens，quota 为累计消耗的原始额度。失败返回 None。
         注意：需要 New API 已开启「记录消耗日志」（LogConsumeEnabled），否则榜单为空。
         """
         end_ts = int(time.time())
@@ -437,8 +437,10 @@ class NewApiCore:
                     "user_id": user_id,
                     "username": item.get("username") or "",
                     "tokens": 0,
+                    "quota": 0,
                 })
                 entry["tokens"] += tokens
+                entry["quota"] += int(item.get("quota") or 0)
                 if not entry["username"] and item.get("username"):
                     entry["username"] = item["username"]
             if page * page_size >= total:

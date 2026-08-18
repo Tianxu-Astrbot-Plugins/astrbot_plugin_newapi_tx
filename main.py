@@ -462,19 +462,24 @@ class NewApiSuitePlugin(Star):
         stats.sort(key=lambda x: x['tokens'], reverse=True)
         top = stats[:top_n]
 
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
+        ratio = ratio if ratio else 1
+
         lines = []
         medals = ["🥇", "🥈", "🥉"]
         for idx, s in enumerate(top):
             rank = idx + 1
             prefix = medals[idx] if idx < 3 else f"{rank}."
             username = s.get("username") or str(s["user_id"])
+            display_quota = (s.get("quota", 0) or 0) / ratio
             binding = await self.core.get_user_by_website_id(s["user_id"])
             if binding:
                 line = self.t("consumption.line_bound", prefix=prefix, username=username,
-                              qq=binding['qq_id'], tokens=f"{s['tokens']:,}")
+                              qq=binding['qq_id'], tokens=f"{s['tokens']:,}",
+                              quota=f"{display_quota:.6f}")
             else:
                 line = self.t("consumption.line", prefix=prefix, username=username,
-                              tokens=f"{s['tokens']:,}")
+                              tokens=f"{s['tokens']:,}", quota=f"{display_quota:.6f}")
             lines.append(line)
 
         reply = self.t("consumption.header", top_n=top_n, hours=hours, lines="\n".join(lines))
