@@ -1,4 +1,6 @@
 import os
+import asyncio
+import time
 from typing import Optional, Tuple
 from functools import wraps
 from astrbot.api import logger, AstrBotConfig
@@ -75,6 +77,9 @@ class NewApiSuitePlugin(Star):
         self.config = config
         self.core = NewApiCore(config)
         self.heist_handler = HeistLogic(config, self.core)
+        # 排行榜缓存：避免频繁查询 API，默认一天更新一次
+        self._leaderboard_cache = None
+        self._leaderboard_cache_time = 0.0
         logger.info("[NewAPI Suite] 插件已实例化，准备进行异步初始化...")
 
     async def initialize(self):
@@ -358,6 +363,43 @@ QQ号: {binding['qq_id']}
         
         yield event.plain_result(reply)
 
+    @filter.command("榜单")
+    async def handle_leaderboard(self, event: AstrMessageEvent):
+        """展示群内余额榜与打劫榜（默认一天缓存更新一次）。"""
+        lb_conf = self.config.get('leaderboard_settings', {})
+        if not lb_conf.get('enabled', False):
+            yield event.plain_result("排行榜功能未开启。")
+            return
+        top_n = max(1, int(lb_conf.get('top_n', 10)))
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
+        max_concurrency = max(1, int(lb_conf.get('max_concurrency', 20)))
+        update_interval_hours = max(0.1, float(lb_conf.get('update_interval_hours', 24)))
+        balance_query_limit = max(1, int(lb_conf.get('balance_query_limit', 200)))
+
+        # 缓存命中：在更新间隔内直接返回缓存，避免频繁查 API
+        now = time.time()
+        interval_seconds = update_interval_hours * 3600
+        if (
+            self._leaderboard_cache is not None
+            and (now - self._leaderboard_cache_time) < interval_seconds
+        ):
+            balance_lines, heist_lines, cached_top_n = self._leaderboard_cache
+            top_n = cached_top_n
+        else:
+            balance_lines = await self._build_balance_board(
+                top_n, ratio, max_concurrency, balance_query_limit
+            )
+            heist_lines = await self._build_heist_board(top_n, ratio)
+            self._leaderboard_cache = (balance_lines, heist_lines, top_n)
+            self._leaderboard_cache_time = now
+
+        reply = f"""🏆 群余额榜 TOP {top_n}
+{balance_lines}
+
+🥷 打劫榜 TOP {top_n}
+{heist_lines}"""
+        yield event.plain_result(reply)
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def handle_group_decrease(self, event: AstrMessageEvent):
         """监听群成员减少事件，执行解绑并发送通知。"""
@@ -416,6 +458,74 @@ QQ号: {binding['qq_id']}
                 logger.error(f"在为用户 {user_id} 发送退群净化通告时发生错误: {e}", exc_info=True)
         
         event.stop_event()
+
+    # --- 排行榜辅助方法 ---
+
+    async def _build_balance_board(self, top_n: int, ratio: int, max_concurrency: int = 20, query_limit: int = 200) -> str:
+        """构建余额排行榜：查询最近绑定的部分用户（query_limit 上限），并发获取实时余额并排序。
+
+        注：不遍历全部绑定用户，避免上千用户的排行榜触发上千次 API 请求。
+        """
+        bindings = await self.core.execute_query(
+            "SELECT qq_id, website_user_id FROM newapi_bindings ORDER BY id DESC LIMIT %s",
+            (query_limit,), fetch='all'
+        )
+        if not bindings:
+            return "暂无绑定用户。"
+
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def fetch_quota(b):
+            async with semaphore:
+                data = await self.core.get_api_user_data(b['website_user_id'])
+            if data:
+                return b['qq_id'], b['website_user_id'], data.get('quota', 0)
+            return None
+
+        results = await asyncio.gather(*(fetch_quota(b) for b in bindings))
+        results = [r for r in results if r is not None]
+        results.sort(key=lambda x: x[2], reverse=True)
+        results = results[:top_n]
+
+        if not results:
+            return "无法获取余额数据。"
+
+        lines = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, (qq_id, site_id, quota) in enumerate(results):
+            rank = idx + 1
+            prefix = medals[idx] if idx < 3 else f"{rank}."
+            display = quota / ratio
+            lines.append(f"{prefix} QQ:{qq_id} (ID:{site_id}) → {display:.6f}")
+        return "\n".join(lines)
+
+    async def _build_heist_board(self, top_n: int, ratio: int) -> str:
+        """构建打劫排行榜：聚合打劫日志，按净收益排序（成功为正、失败为负）。"""
+        query = """
+            SELECT robber_qq_id,
+                   COUNT(*) AS attempts,
+                   SUM(CASE WHEN outcome IN ('SUCCESS', 'CRITICAL') THEN 1 ELSE 0 END) AS wins,
+                   SUM(amount) AS net
+            FROM daily_heist_log
+            GROUP BY robber_qq_id
+            ORDER BY net DESC
+            LIMIT %s
+        """
+        rows = await self.core.execute_query(query, (top_n,), fetch='all')
+        if not rows:
+            return "暂无打劫记录。"
+
+        lines = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, row in enumerate(rows):
+            rank = idx + 1
+            prefix = medals[idx] if idx < 3 else f"{rank}."
+            net_display = (row['net'] or 0) / ratio
+            lines.append(
+                f"{prefix} QQ:{row['robber_qq_id']} → 出手{row['attempts']}次 "
+                f"胜{row['wins']}次 净赚{net_display:.6f}"
+            )
+        return "\n".join(lines)
 
     # --- 绑定功能辅助方法 ---
 
