@@ -1,6 +1,5 @@
 import os
 import asyncio
-import time
 from typing import Optional, Tuple
 from functools import wraps
 from astrbot.api import logger, AstrBotConfig
@@ -77,9 +76,8 @@ class NewApiSuitePlugin(Star):
         self.config = config
         self.core = NewApiCore(config)
         self.heist_handler = HeistLogic(config, self.core)
-        # 排行榜缓存：避免频繁查询 API，默认一天更新一次
-        self._leaderboard_cache = None
-        self._leaderboard_cache_time = 0.0
+        # 余额缓存：用户每次操作时顺手更新，排行榜直接读缓存无需查 API
+        self._balance_cache: dict[int, tuple[int, int]] = {}
         logger.info("[NewAPI Suite] 插件已实例化，准备进行异步初始化...")
 
     async def initialize(self):
@@ -122,6 +120,9 @@ New API 状态: {api_status}"""
 --------------------
 您绑定的网站ID: {website_user_id}
 当前剩余额度: {display_quota:.6f}"""
+
+        # 顺便更新余额缓存，供排行榜使用
+        self._balance_cache[website_user_id] = (binding['qq_id'], api_user_data.get("quota", 0))
         
         yield event.plain_result(reply)
 
@@ -193,7 +194,8 @@ New API 状态: {api_status}"""
         match status:
             case "SUCCESS":
                 first_bonus_enabled = check_in_conf.get('first_check_in_bonus_enabled', False)
-                
+                ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
+
                 if details["is_first"] and first_bonus_enabled:
                     template = check_in_conf.get('first_check_in_success_template')
                 elif details["is_doubled"]:
@@ -207,6 +209,9 @@ New API 状态: {api_status}"""
                     user_qq=details['user_qq'],
                     site_id=details['site_id']
                 )
+                # 签到成功后顺便更新余额缓存，供排行榜使用
+                new_raw_quota = int(details['display_total'] * ratio)
+                self._balance_cache[details['site_id']] = (details['user_qq'], new_raw_quota)
             case "DISABLED":
                 reply = "抱歉，每日签到功能当前未开启。"
             case "ALREADY_CHECKED_IN":
@@ -338,8 +343,24 @@ QQ号: {binding['qq_id']}
         match status:
             case "SUCCESS":
                 reply = success_template.format(gain=details['gain'])
+                # 打劫成功后顺便更新余额缓存（抢劫者+受害者），供排行榜使用
+                robber_binding = await self.core.get_user_by_qq(robber_qq_id)
+                victim_binding = await self.core.get_user_by_qq(victim_qq_id)
+                for b in (robber_binding, victim_binding):
+                    if b:
+                        data = await self.core.get_api_user_data(b['website_user_id'])
+                        if data:
+                            self._balance_cache[b['website_user_id']] = (b['qq_id'], data.get('quota', 0))
             case "CRITICAL":
                 reply = critical_template.format(gain=details['gain'])
+                # 同上
+                robber_binding = await self.core.get_user_by_qq(robber_qq_id)
+                victim_binding = await self.core.get_user_by_qq(victim_qq_id)
+                for b in (robber_binding, victim_binding):
+                    if b:
+                        data = await self.core.get_api_user_data(b['website_user_id'])
+                        if data:
+                            self._balance_cache[b['website_user_id']] = (b['qq_id'], data.get('quota', 0))
             case "FAILURE":
                 reply = failure_template.format(penalty=details['penalty'])
             case "DISABLED":
@@ -365,33 +386,18 @@ QQ号: {binding['qq_id']}
 
     @filter.command("榜单")
     async def handle_leaderboard(self, event: AstrMessageEvent):
-        """展示群内余额榜与打劫榜（默认一天缓存更新一次）。"""
+        """展示群内余额榜与打劫榜（余额从用户操作缓存读取，无需查API）。"""
         lb_conf = self.config.get('leaderboard_settings', {})
         if not lb_conf.get('enabled', False):
             yield event.plain_result("排行榜功能未开启。")
             return
         top_n = max(1, int(lb_conf.get('top_n', 10)))
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
-        max_concurrency = max(1, int(lb_conf.get('max_concurrency', 20)))
-        update_interval_hours = max(0.1, float(lb_conf.get('update_interval_hours', 24)))
-        balance_query_limit = max(1, int(lb_conf.get('balance_query_limit', 200)))
 
-        # 缓存命中：在更新间隔内直接返回缓存，避免频繁查 API
-        now = time.time()
-        interval_seconds = update_interval_hours * 3600
-        if (
-            self._leaderboard_cache is not None
-            and (now - self._leaderboard_cache_time) < interval_seconds
-        ):
-            balance_lines, heist_lines, cached_top_n = self._leaderboard_cache
-            top_n = cached_top_n
-        else:
-            balance_lines = await self._build_balance_board(
-                top_n, ratio, max_concurrency, balance_query_limit
-            )
-            heist_lines = await self._build_heist_board(top_n, ratio)
-            self._leaderboard_cache = (balance_lines, heist_lines, top_n)
-            self._leaderboard_cache_time = now
+        # 余额榜：直接从缓存读取并排序（用户每次签到/查余额/打劫时更新缓存）
+        balance_lines = self._build_balance_board_from_cache(top_n, ratio)
+        # 打劫榜：纯 SQL 聚合
+        heist_lines = await self._build_heist_board(top_n, ratio)
 
         reply = f"""🏆 群余额榜 TOP {top_n}
 {balance_lines}
@@ -461,42 +467,25 @@ QQ号: {binding['qq_id']}
 
     # --- 排行榜辅助方法 ---
 
-    async def _build_balance_board(self, top_n: int, ratio: int, max_concurrency: int = 20, query_limit: int = 200) -> str:
-        """构建余额排行榜：查询最近绑定的部分用户（query_limit 上限），并发获取实时余额并排序。
+    def _build_balance_board_from_cache(self, top_n: int, ratio: int) -> str:
+        """构建余额排行榜：直接读取内存缓存，无需查 API。
 
-        注：不遍历全部绑定用户，避免上千用户的排行榜触发上千次 API 请求。
+        缓存由用户每次操作（签到/查余额/打劫）时顺手更新。
         """
-        bindings = await self.core.execute_query(
-            "SELECT qq_id, website_user_id FROM newapi_bindings ORDER BY id DESC LIMIT %s",
-            (query_limit,), fetch='all'
-        )
-        if not bindings:
-            return "暂无绑定用户。"
-
-        semaphore = asyncio.Semaphore(max_concurrency)
-
-        async def fetch_quota(b):
-            async with semaphore:
-                data = await self.core.get_api_user_data(b['website_user_id'])
-            if data:
-                return b['qq_id'], b['website_user_id'], data.get('quota', 0)
-            return None
-
-        results = await asyncio.gather(*(fetch_quota(b) for b in bindings))
-        results = [r for r in results if r is not None]
-        results.sort(key=lambda x: x[2], reverse=True)
-        results = results[:top_n]
-
+        if not self._balance_cache:
+            return "暂无缓存余额数据（请先执行签到或查余额）。"
+        results = sorted(
+            self._balance_cache.values(), key=lambda x: x[1], reverse=True
+        )[:top_n]
         if not results:
-            return "无法获取余额数据。"
-
+            return "暂无缓存余额数据。"
         lines = []
         medals = ["🥇", "🥈", "🥉"]
-        for idx, (qq_id, site_id, quota) in enumerate(results):
+        for idx, (qq_id, quota) in enumerate(results):
             rank = idx + 1
             prefix = medals[idx] if idx < 3 else f"{rank}."
             display = quota / ratio
-            lines.append(f"{prefix} QQ:{qq_id} (ID:{site_id}) → {display:.6f}")
+            lines.append(f"{prefix} QQ:{qq_id} → {display:.6f}")
         return "\n".join(lines)
 
     async def _build_heist_board(self, top_n: int, ratio: int) -> str:

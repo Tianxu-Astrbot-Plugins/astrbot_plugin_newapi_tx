@@ -121,10 +121,7 @@
         "type": "object",
         "items": {
             "enabled": { "description": "是否启用排行榜功能", "type": "bool", "default": false },
-            "top_n": { "description": "排行榜显示的名次数量", "type": "int", "default": 10 },
-            "max_concurrency": { "description": "查询余额时的最大并发数（防止一次请求过多打爆API）", "type": "int", "default": 20 },
-            "balance_query_limit": { "description": "余额榜最多查询的绑定用户数（避免千次查询，按最近绑定时间倒序取前N个）", "type": "int", "default": 200 },
-            "update_interval_hours": { "description": "排行榜缓存更新时间间隔（小时），默认24小时更新一次", "type": "float", "default": 24.0 }
+            "top_n": { "description": "排行榜显示的名次数量", "type": "int", "default": 10 }
         }
     },
     "optional_pm_settings": {

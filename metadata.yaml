@@ -1,6 +1,6 @@
 name: astrbot_plugin_newapi_tx
 display_name: Newapi多功能插件星涵煦版
-version: 1.0.13
+version: 1.0.14
 desc: astrbot_plugin_newapi_tx_是一个为 AstrBot 打造的 QQ 群 ↔ New API 网站联动插件，集用户绑定、额度经济、群聊互动、管理员工具 于一体，并支持 退群自动解绑与账号净化 的全自动管理套件。无需.env,直接配置！
 author: xinghanxu
 repo: https://github.com/Tianxu-Astrbot-Plugins/astrbot_plugin_newapi_tx
