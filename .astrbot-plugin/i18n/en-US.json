@@ -77,6 +77,12 @@
       "enabled": { "description": "Whether the leaderboard feature is enabled" },
       "top_n": { "description": "Number of ranks shown on the leaderboard" }
     },
+    "consumption_leaderboard_settings": {
+      "description": "[Leaderboard] Site-wide 24h consumption board (requires New API 'record consume logs')",
+      "enabled": { "description": "Whether the consumption leaderboard is enabled (depends on New API consume logs; empty if logging is off)" },
+      "top_n": { "description": "Number of ranks shown on the board" },
+      "window_hours": { "description": "Statistics window in hours" }
+    },
     "optional_pm_settings": {
       "description": "Optional private-message notifications",
       "enable_bind_success_pm": { "description": "Whether to send a PM after binding succeeds" },

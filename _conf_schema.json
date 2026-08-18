@@ -131,6 +131,15 @@
             "top_n": { "description": "排行榜显示的名次数量", "type": "int", "default": 10 }
         }
     },
+    "consumption_leaderboard_settings": {
+        "description": "【排行榜】全站24小时消耗榜（需 New API 开启「记录消耗日志」）",
+        "type": "object",
+        "items": {
+            "enabled": { "description": "是否启用消耗排行榜功能（依赖 New API 的消耗日志，若未开启记录则榜单为空）", "type": "bool", "default": false },
+            "top_n": { "description": "消耗榜显示的名次数量", "type": "int", "default": 10 },
+            "window_hours": { "description": "统计的时间窗口（小时）", "type": "int", "default": 24 }
+        }
+    },
     "optional_pm_settings": {
         "description": "可选的私信通知",
         "type": "object",

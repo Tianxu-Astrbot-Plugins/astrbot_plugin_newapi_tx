@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 import httpx
 import aiomysql
 import aiosqlite
@@ -399,6 +400,51 @@ class NewApiCore:
         if response and response.get("success"):
             return response.get("data")
         return None
+
+    async def get_user_token_consumption(self, hours: int = 24) -> Optional[list]:
+        """聚合近 N 小时全站消耗日志（type=2），按网站用户 ID 汇总 token 消耗。
+
+        通过 New API 后台接口 GET /api/log/ 分页拉取并聚合，返回：
+            [{"user_id": int, "username": str, "tokens": int}, ...]
+        其中 tokens = prompt_tokens + completion_tokens。失败返回 None。
+        注意：需要 New API 已开启「记录消耗日志」（LogConsumeEnabled），否则榜单为空。
+        """
+        end_ts = int(time.time())
+        start_ts = end_ts - max(1, int(hours)) * 3600
+        page_size = 100      # New API 服务端单页上限为 100
+        max_pages = 100      # 最多聚合 100 页（约 1 万条日志），防止超大站点拖垮命令
+        stats: Dict[int, Dict[str, Any]] = {}
+        page = 1
+        while page <= max_pages:
+            endpoint = (
+                f"/api/log/?type=2&start_timestamp={start_ts}&end_timestamp={end_ts}"
+                f"&p={page}&page_size={page_size}"
+            )
+            resp = await self.api_request("GET", endpoint)
+            if not resp or not resp.get("success"):
+                return None
+            data = resp.get("data") or {}
+            items = data.get("items") or []
+            if not items:
+                break
+            total = int(data.get("total") or 0)
+            for item in items:
+                user_id = item.get("user_id")
+                if user_id is None:
+                    continue
+                tokens = int(item.get("prompt_tokens") or 0) + int(item.get("completion_tokens") or 0)
+                entry = stats.setdefault(user_id, {
+                    "user_id": user_id,
+                    "username": item.get("username") or "",
+                    "tokens": 0,
+                })
+                entry["tokens"] += tokens
+                if not entry["username"] and item.get("username"):
+                    entry["username"] = item["username"]
+            if page * page_size >= total:
+                break
+            page += 1
+        return list(stats.values())
 
     async def update_api_user(self, user_profile: Dict) -> bool:
         logger.info(f"[DEBUG] update_api_user payload: {user_profile}")

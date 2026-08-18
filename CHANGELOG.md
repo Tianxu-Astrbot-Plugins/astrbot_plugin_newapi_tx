@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.20] - 2026-08-19
+
+### 新增
+- `/消耗榜`（管理员）：展示全站用户近 24 小时 token 消耗排行榜，通过 New API 后台接口 `/api/log/` 聚合 `prompt_tokens + completion_tokens` 按用户排序；每行展示网站用户名，若该网站用户已绑定则附带 QQ 号。时间窗口、名次数量、开关均可在 `consumption_leaderboard_settings` 中配置。
+- ⚠️ 依赖 New API 的「记录消耗日志」（LogConsumeEnabled）：若站点未开启消耗日志记录，榜单将为空。
+
 ## [1.0.19] - 2026-08-19
 
 ### 新增

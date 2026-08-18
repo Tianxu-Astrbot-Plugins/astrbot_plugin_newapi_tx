@@ -438,6 +438,48 @@ class NewApiSuitePlugin(Star):
         reply = self.t("leaderboard.header", top_n=top_n, balance=balance_lines, heist=heist_lines)
         yield event.plain_result(reply)
 
+    @filter.command("消耗榜")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def handle_consumption_leaderboard(self, event: AstrMessageEvent):
+        """(管理员) 展示全站用户近 N 小时 token 消耗排行榜（用户名 + 已绑定则附 QQ 号）。"""
+        conf = self.config.get('consumption_leaderboard_settings', {})
+        if not conf.get('enabled', False):
+            yield event.plain_result(self.t("consumption.disabled"))
+            return
+        top_n = max(1, int(conf.get('top_n', 10)))
+        hours = max(1, int(conf.get('window_hours', 24)))
+
+        yield event.plain_result(self.t("consumption.fetching", hours=hours))
+
+        stats = await self.core.get_user_token_consumption(hours=hours)
+        if stats is None:
+            yield event.plain_result(self.t("consumption.fetch_failed"))
+            return
+        if not stats:
+            yield event.plain_result(self.t("consumption.no_data", hours=hours))
+            return
+
+        stats.sort(key=lambda x: x['tokens'], reverse=True)
+        top = stats[:top_n]
+
+        lines = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, s in enumerate(top):
+            rank = idx + 1
+            prefix = medals[idx] if idx < 3 else f"{rank}."
+            username = s.get("username") or str(s["user_id"])
+            binding = await self.core.get_user_by_website_id(s["user_id"])
+            if binding:
+                line = self.t("consumption.line_bound", prefix=prefix, username=username,
+                              qq=binding['qq_id'], tokens=f"{s['tokens']:,}")
+            else:
+                line = self.t("consumption.line", prefix=prefix, username=username,
+                              tokens=f"{s['tokens']:,}")
+            lines.append(line)
+
+        reply = self.t("consumption.header", top_n=top_n, hours=hours, lines="\n".join(lines))
+        yield event.plain_result(reply)
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def handle_group_decrease(self, event: AstrMessageEvent):
         """监听群成员减少事件，执行解绑并发送通知。"""
