@@ -174,6 +174,15 @@ class NewApiCore:
               PRIMARY KEY (`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
+            await self.execute_query("""
+            CREATE TABLE IF NOT EXISTS `newapi_check_in_state` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `qq_id` bigint(20) NOT NULL,
+              `last_check_in_time` timestamp NULL DEFAULT NULL,
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `qq_id` (`qq_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """)
             logger.info("[NewAPI Utils] MySQL 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -201,6 +210,13 @@ class NewApiCore:
               heist_time TEXT NOT NULL DEFAULT (datetime('now')),
               outcome TEXT NOT NULL,
               amount INTEGER NOT NULL
+            );
+            """)
+            await self._execute_sqlite("""
+            CREATE TABLE IF NOT EXISTS newapi_check_in_state (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              qq_id INTEGER NOT NULL UNIQUE,
+              last_check_in_time TEXT
             );
             """)
             logger.info("[NewAPI Utils] SQLite 数据表结构已确认就绪。")
@@ -386,11 +402,26 @@ class NewApiCore:
             )
         return 0
 
+    async def get_check_in_state(self, qq_id: int) -> Optional[Dict]:
+        """获取指定 QQ 的持久化签到状态（退群/解绑不会清除，防止刷新人礼包与重复签到）。"""
+        return await self.execute_query(
+            "SELECT * FROM newapi_check_in_state WHERE qq_id = %s", (qq_id,), fetch='one'
+        )
+
     async def set_check_in_time(self, qq_id: int) -> int:
+        """写入/更新指定 QQ 的签到时间到独立状态表（跨引擎 upsert）。"""
         # datetime.utcnow() 存储为字符串以兼容 SQLite
         now_str = self._format_datetime_for_sqlite(datetime.utcnow())
-        query = "UPDATE newapi_bindings SET last_check_in_time = %s WHERE qq_id = %s"
-        return await self.execute_query(query, (now_str, qq_id))
+        existing = await self.get_check_in_state(qq_id)
+        if existing:
+            return await self.execute_query(
+                "UPDATE newapi_check_in_state SET last_check_in_time = %s WHERE qq_id = %s",
+                (now_str, qq_id)
+            )
+        return await self.execute_query(
+            "INSERT INTO newapi_check_in_state (qq_id, last_check_in_time) VALUES (%s, %s)",
+            (qq_id, now_str)
+        )
 
     async def revert_user_group(self, website_user_id: int) -> bool:
         api_user_data = await self.get_api_user_data(website_user_id)
@@ -440,7 +471,10 @@ class NewApiCore:
 
         time_delta = timedelta(hours=offset_hours)
         local_today = (datetime.utcnow() + time_delta).date()
-        last_check_in_time = binding.get('last_check_in_time')
+        # 【修复】签到时间从持久化状态表读取（退群/解绑不会清除）。
+        # 兼容旧数据：状态表无记录时回退到绑定记录上的 last_check_in_time，实现一次性迁移。
+        state = await self.get_check_in_state(qq_id)
+        last_check_in_time = state.get('last_check_in_time') if state else binding.get('last_check_in_time')
         is_first_check_in = last_check_in_time is None
 
         if not is_first_check_in:
