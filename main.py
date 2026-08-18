@@ -62,6 +62,21 @@ def require_binding(f):
             
     return wrapper
 
+def require_group_whitelist(f):
+    """
+    仅当消息来自白名单群（或白名单功能未启用）时放行，否则静默忽略、不回复。
+
+    用于「签到 / 打劫 / 查询余额」等仅允许在配置群内响应的命令。
+    """
+    @wraps(f)
+    async def wrapper(self, event: AstrMessageEvent, *args, **kwargs):
+        if not self._command_group_allowed(event):
+            return
+        async for item in f(self, event, *args, **kwargs):
+            yield item
+            
+    return wrapper
+
 @register(
     "NewAPI_plugin",
     "Future-404",
@@ -91,6 +106,20 @@ class NewApiSuitePlugin(Star):
     def t(self, key: str, **kwargs) -> str:
         """翻译运行时消息。"""
         return translate(self.lang, key, **kwargs)
+
+    def _command_group_allowed(self, event: AstrMessageEvent) -> bool:
+        """判断当前消息是否命中群白名单：白名单未启用时一律放行。
+
+        启用后，仅当消息来自 group_whitelist_settings.group_list 中列出的群时返回 True；
+        私聊（group_id 为空）与未列出的群一律返回 False，实现「只监听配置群」。
+        """
+        conf = self.config.get('group_whitelist_settings', {})
+        if not conf.get('enabled', False):
+            return True
+        group_list = conf.get('group_list', [])
+        allowed = {str(g) for g in group_list if str(g).strip()}
+        group_id = str(event.get_group_id() or "")
+        return group_id in allowed
 
     @staticmethod
     def _extract_at_qq(event: AstrMessageEvent) -> Optional[int]:
@@ -144,6 +173,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("查询余额")
+    @require_group_whitelist
     @require_binding
     async def handle_query_balance(self, event: AstrMessageEvent):
         """允许已绑定用户查询网站余额。"""
@@ -220,6 +250,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(message)
 
     @filter.command("签到")
+    @require_group_whitelist
     @require_binding
     async def handle_check_in(self, event: AstrMessageEvent):
         """处理用户每日签到请求。"""
@@ -335,6 +366,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("打劫")
+    @require_group_whitelist
     async def handle_heist_command(self, event: AstrMessageEvent):
         """(娱乐) 对 @ 的目标发起打劫。"""
         robber_qq_id = event.get_sender_id()

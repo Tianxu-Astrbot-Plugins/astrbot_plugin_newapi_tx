@@ -63,6 +63,14 @@
             "revert_group_on_leave": { "description": "退群后恢复的用户组", "type": "string", "default": "default" }
         }
     },
+    "group_whitelist_settings": {
+        "description": "群白名单（只监听配置群）",
+        "type": "object",
+        "items": {
+            "enabled": { "description": "是否启用群白名单；启用后「签到 / 打劫 / 查询余额」仅在下方群号列表内响应，其余群与私聊静默忽略", "type": "bool", "default": false },
+            "group_list": { "description": "允许响应的群号列表（仅当 enabled 开启时生效）", "type": "list", "default": [] }
+        }
+    },
     "heist_settings": {
         "description": "【娱乐功能】打劫设置",
         "type": "object",

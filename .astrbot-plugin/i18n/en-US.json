@@ -51,6 +51,11 @@
       "group_monitoring_list": { "description": "Group IDs to monitor" },
       "revert_group_on_leave": { "description": "User group restored after leaving the group" }
     },
+    "group_whitelist_settings": {
+      "description": "Group whitelist (only listen in configured groups)",
+      "enabled": { "description": "Whether the group whitelist is enabled; when on, check-in / heist / query-balance only respond in the groups listed below, and are silently ignored elsewhere (other groups & DMs)" },
+      "group_list": { "description": "Group IDs allowed to respond (only takes effect when enabled is on)" }
+    },
     "heist_settings": {
       "description": "[Fun] Heist settings",
       "enabled": { "description": "Whether the heist feature is enabled" },
