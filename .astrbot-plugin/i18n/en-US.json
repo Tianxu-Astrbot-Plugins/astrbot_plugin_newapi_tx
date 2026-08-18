@@ -1,0 +1,90 @@
+{
+  "metadata": {
+    "display_name": "NewAPI Multi-function Plugin (Xing Hanxu Edition)",
+    "short_desc": "QQ group <-> New API site integration: binding, quota economy, group fun & admin tools.",
+    "desc": "AstrBot plugin linking QQ groups to a New API website, with user binding, quota economy, group interaction, admin tools, and auto unbind + account cleanup on group leave. No .env required - configure directly!"
+  },
+  "config": {
+    "api_settings": {
+      "description": "New API website config (leave empty to fall back to .env)",
+      "api_base_url": { "description": "New API website base URL (no trailing /); empty uses .env" },
+      "api_access_token": { "description": "Token generated in the New API dashboard; empty uses .env" },
+      "api_admin_user_id": { "description": "User ID used for admin operations; empty uses .env" }
+    },
+    "database_settings": {
+      "description": "Database (MySQL) (leave empty to fall back to .env)",
+      "host": { "description": "MySQL host; empty uses .env" },
+      "port": { "description": "MySQL port; 0 uses .env" },
+      "user": { "description": "MySQL username; empty uses .env" },
+      "password": { "description": "MySQL password; empty uses .env" },
+      "name": { "description": "MySQL database name; empty uses .env" }
+    },
+    "sqlite_settings": {
+      "description": "SQLite mode (\u26a0\ufe0f SQLite and MySQL are two separate datasets; switching does not migrate data, you must re-bind)",
+      "use_sqlite_mode": { "description": "When enabled, bindings and heist logs are stored in a single SQLite file instead of MySQL (the MySQL config above is ignored)" }
+    },
+    "binding_settings": {
+      "description": "Core binding feature",
+      "binding_group": { "description": "User group auto-assigned after binding" },
+      "min_qq_level": { "description": "Minimum QQ level allowed to bind" },
+      "quota_display_ratio": { "description": "Quota display exchange rate (raw quota / this value)" },
+      "forbidden_website_ids": { "description": "Blacklisted website IDs (only blocks new bindings, existing bindings unaffected)" },
+      "forbidden_user_ids": { "description": "Blacklisted QQ numbers (only blocks new bindings, existing bindings unaffected)" }
+    },
+    "check_in_settings": {
+      "description": "Daily check-in feature",
+      "enabled": { "description": "Whether check-in is enabled" },
+      "timezone_offset_hours": { "description": "Timezone offset (e.g. 8 for UTC+8)" },
+      "min_display_quota": { "description": "Minimum display quota per check-in" },
+      "max_display_quota": { "description": "Maximum display quota per check-in" },
+      "double_chance": { "description": "Probability of a double reward" },
+      "diminish_enabled": { "description": "Enable diminishing reward (the more balance, the lower the max reward per tier; the minimum stays unchanged)" },
+      "diminish_threshold": { "description": "Diminishing threshold (display quota); rewards start halving per tier beyond this" },
+      "first_check_in_bonus_enabled": { "description": "Whether to grant a first-check-in bonus" },
+      "first_check_in_bonus_display_quota": { "description": "Extra display quota for the first check-in" },
+      "check_in_success_template": { "description": "Check-in success message template" },
+      "check_in_doubled_template": { "description": "Check-in double-reward message template" },
+      "first_check_in_success_template": { "description": "First check-in success message template" }
+    },
+    "group_leave_settings": {
+      "description": "Auto cleanup on group leave",
+      "group_monitoring_list": { "description": "Group IDs to monitor" },
+      "revert_group_on_leave": { "description": "User group restored after leaving the group" }
+    },
+    "heist_settings": {
+      "description": "[Fun] Heist settings",
+      "enabled": { "description": "Whether the heist feature is enabled" },
+      "max_attempts_per_day": { "description": "Max active heists per user per day" },
+      "max_defenses_per_day": { "description": "Max times a user can be successfully robbed per day" },
+      "min_amount": { "description": "Minimum [display quota] gained on success" },
+      "max_amount": { "description": "Maximum [display quota] gained on success" },
+      "critical_chance": { "description": "Probability of a critical (double) hit (0.0 to 1.0)" },
+      "failure_chance": { "description": "Probability of failure and penalty (0.0 to 1.0)" },
+      "failure_penalty": { "description": "[Display quota] paid to the victim on failure" },
+      "cooldown_seconds": { "description": "Cooldown between two heists (seconds)" },
+      "success_template": { "description": "Heist success message template. Variables: {gain}" },
+      "critical_template": { "description": "Heist critical message template. Variables: {gain}" },
+      "failure_template": { "description": "Heist failure message template. Variables: {penalty}" },
+      "attempts_exceeded_template": { "description": "Message when the robber's attempts are used up" },
+      "defenses_exceeded_template": { "description": "Message when the victim's defenses are used up. Variables: {victim_id}" },
+      "victim_not_found_template": { "description": "Message when the target is not found. Variables: {victim_identifier}" },
+      "cannot_rob_self_template": { "description": "Message when trying to rob yourself" },
+      "robber_not_bound_template": { "description": "Message when the robber is not bound" },
+      "cooldown_template": { "description": "Heist cooldown message. Variables: {remaining_time}" }
+    },
+    "leaderboard_settings": {
+      "description": "[Leaderboard] Balance board & heist board",
+      "enabled": { "description": "Whether the leaderboard feature is enabled" },
+      "top_n": { "description": "Number of ranks shown on the leaderboard" }
+    },
+    "optional_pm_settings": {
+      "description": "Optional private-message notifications",
+      "enable_bind_success_pm": { "description": "Whether to send a PM after binding succeeds" },
+      "bind_success_pm_template": { "description": "Binding-success PM content template" }
+    },
+    "i18n_settings": {
+      "description": "Language",
+      "language": { "description": "Reply language" }
+    }
+  }
+}

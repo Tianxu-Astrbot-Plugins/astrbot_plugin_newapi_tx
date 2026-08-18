@@ -138,5 +138,18 @@
             "enable_bind_success_pm": { "description": "是否在绑定成功后发送私信", "type": "bool", "default": true },
             "bind_success_pm_template": { "description": "绑定成功私信的内容模板", "type": "text", "default": "绑定成功！" }
         }
+    },
+    "i18n_settings": {
+        "description": "语言 / Language",
+        "type": "object",
+        "items": {
+            "language": {
+                "description": "插件回复语言 / Reply language",
+                "type": "string",
+                "options": ["zh", "en"],
+                "labels": ["中文", "English"],
+                "default": "zh"
+            }
+        }
     }
 }

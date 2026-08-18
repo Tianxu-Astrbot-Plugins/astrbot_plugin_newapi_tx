@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.19] - 2026-08-19
+
+### 新增
+- `/查余额`、`/调整余额` 支持 @ 提及目标：可 `@对方` 代替手输网站ID/QQ号；`/调整余额 @对方 100` 同样可用。
+- 插件支持中英双语（i18n）：运行时回复文案按 `i18n_settings.language`（zh/en）切换；WebUI 文案通过 `.astrbot-plugin/i18n/en-US.json` 提供英文翻译。
+
 ## [1.0.18] - 2026-08-19
 
 ### 修复
