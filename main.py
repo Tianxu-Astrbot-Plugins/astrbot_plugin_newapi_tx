@@ -245,6 +245,7 @@ class NewApiSuitePlugin(Star):
         success, message = await self._perform_binding_ritual(user_qq_id, website_user_id)
         
         if success:
+            await self.put_kv_data(f"binding:user_id:{website_user_id}", user_qq_id)
             await self._send_success_pm(event, user_qq_id, website_user_id)
         
         yield event.plain_result(message)
@@ -302,6 +303,7 @@ class NewApiSuitePlugin(Star):
         
         reply = ""
         if success:
+            await self.delete_kv_data(f"binding:user_id:{website_user_id}")
             reply = self.t("unbind.success", site_id=website_user_id, qq=binding_info['qq_id'])
         else:
             if binding_info is None:
@@ -499,15 +501,25 @@ class NewApiSuitePlugin(Star):
         show_quota = bool(conf.get('show_quota', False))
         show_qq = bool(conf.get('show_qq', True))
 
+        # 缓存所有有消耗用户的绑定关系到 KV，避免每次查 DB（也避免瞬时 DB 故障导致 QQ 不显示）
+        if show_qq:
+            for s in stats:
+                user_id = s["user_id"]
+                cached = await self.get_kv_data(f"binding:user_id:{user_id}", None)
+                if cached is None:
+                    binding = await self.core.get_user_by_website_id(user_id)
+                    if binding:
+                        await self.put_kv_data(f"binding:user_id:{user_id}", binding['qq_id'])
+
         lines = []
         medals = ["🥇", "🥈", "🥉"]
         for idx, s in enumerate(top):
             rank = idx + 1
             prefix = medals[idx] if idx < 3 else f"{rank}."
             username = s.get("username") or str(s["user_id"])
-            binding = await self.core.get_user_by_website_id(s["user_id"]) if show_qq else None
-            show_bound = show_qq and binding is not None
-            qq = str(binding['qq_id']) if show_bound else ""
+            qq_id = await self.get_kv_data(f"binding:user_id:{s['user_id']}", None) if show_qq else None
+            show_bound = show_qq and qq_id is not None
+            qq = str(qq_id) if show_bound else ""
             if show_quota:
                 display_quota = (s.get("quota", 0) or 0) / ratio
                 if show_bound:
@@ -562,6 +574,7 @@ class NewApiSuitePlugin(Star):
         success, _ = await self.core.purge_user_binding(website_user_id)
 
         if success:
+            await self.delete_kv_data(f"binding:user_id:{website_user_id}")
             logger.info(f"用户 {user_id} (网站ID: {website_user_id}) 的退群净化仪式成功完成。" )
             
             try:
