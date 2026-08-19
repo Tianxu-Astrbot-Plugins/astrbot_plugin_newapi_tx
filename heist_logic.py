@@ -106,7 +106,8 @@ class HeistLogic:
             transfer_success, actual_penalty, raw_penalty = await self.core.transfer_display_quota(
                 from_user_id=robber_site_id,
                 to_user_id=victim_site_id,
-                display_amount=amount
+                display_amount=amount,
+                allow_partial=True
             )
             if transfer_success:
                 await self.core.log_heist_attempt(robber_qq_id, victim_site_id, "FAILURE", -raw_penalty)

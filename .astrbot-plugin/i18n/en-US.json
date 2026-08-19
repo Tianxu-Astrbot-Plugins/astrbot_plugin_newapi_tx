@@ -87,7 +87,8 @@
       "enabled": { "description": "Whether the consumption leaderboard is enabled (depends on New API consume logs; empty if logging is off)" },
       "top_n": { "description": "Number of ranks shown on the board" },
       "window_hours": { "description": "Statistics window in hours" },
-      "show_quota": { "description": "Whether to also show website quota consumption on each line" }
+      "show_quota": { "description": "Whether to also show website quota consumption on each line" },
+      "show_qq": { "description": "Whether to show the bound user's QQ number on each line (shown when bound; unbounded users unaffected)" }
     },
     "optional_pm_settings": {
       "description": "Optional private-message notifications",

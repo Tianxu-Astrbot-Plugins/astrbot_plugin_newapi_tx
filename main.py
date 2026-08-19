@@ -497,6 +497,7 @@ class NewApiSuitePlugin(Star):
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
         ratio = ratio if ratio else 1
         show_quota = bool(conf.get('show_quota', False))
+        show_qq = bool(conf.get('show_qq', True))
 
         lines = []
         medals = ["🥇", "🥈", "🥉"]
@@ -504,20 +505,22 @@ class NewApiSuitePlugin(Star):
             rank = idx + 1
             prefix = medals[idx] if idx < 3 else f"{rank}."
             username = s.get("username") or str(s["user_id"])
-            binding = await self.core.get_user_by_website_id(s["user_id"])
+            binding = await self.core.get_user_by_website_id(s["user_id"]) if show_qq else None
+            show_bound = show_qq and binding is not None
+            qq = str(binding['qq_id']) if show_bound else ""
             if show_quota:
                 display_quota = (s.get("quota", 0) or 0) / ratio
-                if binding:
+                if show_bound:
                     line = self.t("consumption.line_bound_quota", prefix=prefix, username=username,
-                                  qq=binding['qq_id'], tokens=f"{s['tokens']:,}",
+                                  qq=qq, tokens=f"{s['tokens']:,}",
                                   quota=f"{display_quota:.6f}")
                 else:
                     line = self.t("consumption.line_quota", prefix=prefix, username=username,
                                   tokens=f"{s['tokens']:,}", quota=f"{display_quota:.6f}")
             else:
-                if binding:
+                if show_bound:
                     line = self.t("consumption.line_bound", prefix=prefix, username=username,
-                                  qq=binding['qq_id'], tokens=f"{s['tokens']:,}")
+                                  qq=qq, tokens=f"{s['tokens']:,}")
                 else:
                     line = self.t("consumption.line", prefix=prefix, username=username,
                                   tokens=f"{s['tokens']:,}")
