@@ -263,17 +263,25 @@ class NewApiCore:
         """
         统一的查询入口。根据当前引擎类型自动路由到 MySQL 或 SQLite 实现。
         占位符由子类实现决定（MySQL 用 %s，SQLite 用 ?）。
+        内置一次重试，应对瞬时连接断开等短暂故障。
         """
-        if self.db_mode == "sqlite":
-            return await self._execute_sqlite(query, args, fetch)
-        return await self._execute_mysql(query, args, fetch)
+        for attempt in (1, 2):
+            try:
+                if self.db_mode == "sqlite":
+                    return await self._execute_sqlite(query, args, fetch)
+                return await self._execute_mysql(query, args, fetch)
+            except Exception as e:
+                logger.warning(f"[NewAPI Utils] 数据库查询失败 (第{attempt}次): {e}")
+                if attempt == 2:
+                    logger.error(f"[NewAPI Utils] 数据库查询重试均失败，返回 None: {e}")
+                    return None
+                await asyncio.sleep(0.5)
 
     async def _execute_mysql(self, query: str, args: Optional[Tuple] = None,
                              fetch: Optional[str] = None) -> Any:
         """执行 MySQL 查询。"""
         if self.db_pool is None:
-            logger.error("[NewAPI Utils] MySQL 连接池未建立，无法执行查询。")
-            return None
+            raise RuntimeError("MySQL 连接池未建立")
         async with self.db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor if fetch else aiomysql.Cursor) as cur:
                 await cur.execute(query, args)
@@ -287,8 +295,7 @@ class NewApiCore:
                               fetch: Optional[str] = None) -> Any:
         """执行 SQLite 查询，自动处理占位符转换和行格式转换。"""
         if self.db_conn is None:
-            logger.error("[NewAPI Utils] SQLite 连接未建立，无法执行查询。")
-            return None
+            raise RuntimeError("SQLite 连接未建立")
 
         # MySQL %s 占位符 → SQLite ? 占位符
         q = query.replace("%s", "?")
