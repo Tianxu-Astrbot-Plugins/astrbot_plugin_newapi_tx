@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.23] - 2026-08-20
+
+### 修复
+- 根治 `/消耗榜` 在群聊中 QQ 号不显示的偶发电源：绑定关系改为存储到 AstrBot KV（`binding_cache` dict），展示完全走 KV 而非数据库，彻底规避瞬时 DB 连接故障；`execute_query` 加异常捕获与自动重试兜底。
+- 绑定/解绑/退群净化时自动同步更新 KV 缓存；插件重载时 `terminate()` 生命周期钩子自动清空 KV 缓存。
+
 ## [1.0.22] - 2026-08-19
 
 ### 新增

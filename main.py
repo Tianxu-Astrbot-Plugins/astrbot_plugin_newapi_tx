@@ -154,9 +154,13 @@ class NewApiSuitePlugin(Star):
             logger.info("[NewAPI Suite] 核心服务初始化成功。" )
         else:
             logger.error("[NewAPI Suite] 核心服务初始化失败。" )
-            
 
-    
+    async def terminate(self):
+        """插件被禁用或重载时调用，清空 KV 绑定缓存。"""
+        await self.delete_kv_data("binding_cache")
+        logger.info("[NewAPI Suite] KV 绑定缓存已清空。")
+
+
     @filter.command("pingapi")
     async def handle_ping_command(self, event: AstrMessageEvent):
         """响应ping命令，并报告数据库与 New API 连接状态。"""
@@ -245,7 +249,9 @@ class NewApiSuitePlugin(Star):
         success, message = await self._perform_binding_ritual(user_qq_id, website_user_id)
         
         if success:
-            await self.put_kv_data(f"binding:user_id:{website_user_id}", user_qq_id)
+            cache = await self.get_kv_data("binding_cache", {})
+            cache[str(website_user_id)] = user_qq_id
+            await self.put_kv_data("binding_cache", cache)
             await self._send_success_pm(event, user_qq_id, website_user_id)
         
         yield event.plain_result(message)
@@ -303,7 +309,9 @@ class NewApiSuitePlugin(Star):
         
         reply = ""
         if success:
-            await self.delete_kv_data(f"binding:user_id:{website_user_id}")
+            cache = await self.get_kv_data("binding_cache", {})
+            cache.pop(str(website_user_id), None)
+            await self.put_kv_data("binding_cache", cache)
             reply = self.t("unbind.success", site_id=website_user_id, qq=binding_info['qq_id'])
         else:
             if binding_info is None:
@@ -501,15 +509,19 @@ class NewApiSuitePlugin(Star):
         show_quota = bool(conf.get('show_quota', False))
         show_qq = bool(conf.get('show_qq', True))
 
-        # 缓存所有有消耗用户的绑定关系到 KV，避免每次查 DB（也避免瞬时 DB 故障导致 QQ 不显示）
+        # 缓存所有有消耗用户的绑定关系到 KV（单个 dict 键），避免每次查 DB
+        cache = await self.get_kv_data("binding_cache", {}) if show_qq else {}
+        cache_updated = False
         if show_qq:
             for s in stats:
-                user_id = s["user_id"]
-                cached = await self.get_kv_data(f"binding:user_id:{user_id}", None)
-                if cached is None:
-                    binding = await self.core.get_user_by_website_id(user_id)
+                user_id = str(s["user_id"])
+                if user_id not in cache:
+                    binding = await self.core.get_user_by_website_id(s["user_id"])
                     if binding:
-                        await self.put_kv_data(f"binding:user_id:{user_id}", binding['qq_id'])
+                        cache[user_id] = binding['qq_id']
+                        cache_updated = True
+            if cache_updated:
+                await self.put_kv_data("binding_cache", cache)
 
         lines = []
         medals = ["🥇", "🥈", "🥉"]
@@ -517,7 +529,7 @@ class NewApiSuitePlugin(Star):
             rank = idx + 1
             prefix = medals[idx] if idx < 3 else f"{rank}."
             username = s.get("username") or str(s["user_id"])
-            qq_id = await self.get_kv_data(f"binding:user_id:{s['user_id']}", None) if show_qq else None
+            qq_id = cache.get(str(s["user_id"])) if show_qq else None
             show_bound = show_qq and qq_id is not None
             qq = str(qq_id) if show_bound else ""
             if show_quota:
@@ -574,7 +586,9 @@ class NewApiSuitePlugin(Star):
         success, _ = await self.core.purge_user_binding(website_user_id)
 
         if success:
-            await self.delete_kv_data(f"binding:user_id:{website_user_id}")
+            cache = await self.get_kv_data("binding_cache", {})
+            cache.pop(str(website_user_id), None)
+            await self.put_kv_data("binding_cache", cache)
             logger.info(f"用户 {user_id} (网站ID: {website_user_id}) 的退群净化仪式成功完成。" )
             
             try:
