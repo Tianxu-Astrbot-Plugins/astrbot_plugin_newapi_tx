@@ -32,6 +32,8 @@ class NewApiCore:
         self.api_base_url: Optional[str] = None
         self.api_access_token: Optional[str] = None
         self.api_admin_user_id: Optional[str] = None
+        # 签到并发锁：按 website_user_id 串行化，防止同一账号并发签到绕过「今日已签到」检查（TOCTOU 重复领奖）
+        self._check_in_locks: dict[int, asyncio.Lock] = {}
         logger.info("[NewAPI Utils] 核心工具类已实例化，等待异步初始化...")
 
     @staticmethod
@@ -485,6 +487,12 @@ class NewApiCore:
             )
         return 0
 
+    def _get_check_in_lock(self, website_user_id: int) -> asyncio.Lock:
+        """获取指定网站账号的签到锁（懒创建；纯同步无 await，事件循环内天然原子）。"""
+        if website_user_id not in self._check_in_locks:
+            self._check_in_locks[website_user_id] = asyncio.Lock()
+        return self._check_in_locks[website_user_id]
+
     async def get_check_in_state(self, website_user_id: int) -> Optional[Dict]:
         """获取指定网站账号的持久化签到状态（按网站用户去重，防止多 QQ 轮流绑同一账号刷礼包与重复签到）。"""
         return await self.execute_query(
@@ -542,6 +550,12 @@ class NewApiCore:
         if not binding:
             return "NOT_BOUND", {}
 
+        website_user_id = binding['website_user_id']
+        # 按网站账号加签到锁，防止同一账号并发签到绕过「今日已签到」检查（TOCTOU 重复领奖）
+        async with self._get_check_in_lock(website_user_id):
+            return await self._perform_check_in_locked(qq_id, binding, check_in_conf)
+
+    async def _perform_check_in_locked(self, qq_id: int, binding: Dict, check_in_conf: Dict) -> Tuple[str, Dict[str, Any]]:
         offset_hours = check_in_conf.get('timezone_offset_hours', 0)
         first_bonus_enabled = check_in_conf.get('first_check_in_bonus_enabled', False)
         first_bonus_display_quota = check_in_conf.get('first_check_in_bonus_display_quota', 0)
