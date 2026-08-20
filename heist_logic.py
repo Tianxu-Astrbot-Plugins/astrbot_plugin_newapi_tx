@@ -110,7 +110,10 @@ class HeistLogic:
                 allow_partial=True
             )
             if transfer_success:
-                await self.core.log_heist_attempt(robber_qq_id, victim_site_id, "FAILURE", -raw_penalty)
+                try:
+                    await self.core.log_heist_attempt(robber_qq_id, victim_site_id, "FAILURE", -raw_penalty)
+                except Exception as e:
+                    logger.error(f"打劫失败日志写入失败（资金已划转，仅日志丢失）: {e}", exc_info=True)
                 return "FAILURE", {"penalty": actual_penalty}
         else:  # SUCCESS or CRITICAL
             base_amount = amount / 2 if outcome == "CRITICAL" else amount
@@ -123,7 +126,10 @@ class HeistLogic:
             if transfer_success:
                 # 暴击时，若实际获得大于基础获得额度，才算暴劫成功
                 final_outcome = "CRITICAL" if outcome == "CRITICAL" and actual_gain > base_amount else "SUCCESS"
-                await self.core.log_heist_attempt(robber_qq_id, victim_site_id, final_outcome, raw_gain)
+                try:
+                    await self.core.log_heist_attempt(robber_qq_id, victim_site_id, final_outcome, raw_gain)
+                except Exception as e:
+                    logger.error(f"打劫成功日志写入失败（资金已划转，仅日志丢失）: {e}", exc_info=True)
                 return final_outcome, {"gain": actual_gain}
 
         return "API_ERROR", {}

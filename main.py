@@ -96,6 +96,8 @@ class NewApiSuitePlugin(Star):
         self.lang = self._resolve_language()
         # 余额缓存：用户每次操作时顺手更新，排行榜直接读缓存无需查 API
         self._balance_cache: dict[int, tuple[int, int]] = {}
+        # KV 绑定缓存读-改-写锁，避免并发操作互相覆盖丢失更新
+        self._kv_lock = asyncio.Lock()
         logger.info("[NewAPI Suite] 插件已实例化，准备进行异步初始化...")
 
     def _resolve_language(self) -> str:
@@ -121,6 +123,16 @@ class NewApiSuitePlugin(Star):
         group_id = str(event.get_group_id() or "")
         return group_id in allowed
 
+    async def _update_binding_cache(self, website_user_id, qq_id: Optional[int]):
+        """更新 KV 绑定缓存单条映射（qq_id 为 None 表示删除），加锁避免并发读改写竞态。"""
+        async with self._kv_lock:
+            cache = await self.get_kv_data("binding_cache", {})
+            if qq_id is None:
+                cache.pop(str(website_user_id), None)
+            else:
+                cache[str(website_user_id)] = qq_id
+            await self.put_kv_data("binding_cache", cache)
+
     @staticmethod
     def _extract_at_qq(event: AstrMessageEvent) -> Optional[int]:
         """提取消息中第一个 @ 提及（排除机器人自身）的 QQ 号，无则返回 None。"""
@@ -133,13 +145,6 @@ class NewApiSuitePlugin(Star):
     def _parse_int_safe(value) -> Optional[int]:
         s = str(value).strip() if value is not None else ""
         return int(s) if s.lstrip('-').isdigit() else None
-
-    @staticmethod
-    def _parse_float_safe(value) -> Optional[float]:
-        try:
-            return float(str(value).strip())
-        except (ValueError, TypeError):
-            return None
 
     def _resolve_target(self, event: AstrMessageEvent, identifier) -> Optional[int]:
         """解析查询/操作目标：优先 @ 提及的 QQ，否则解析数字 ID（网站ID或QQ号）。"""
@@ -249,9 +254,7 @@ class NewApiSuitePlugin(Star):
         success, message = await self._perform_binding_ritual(user_qq_id, website_user_id)
         
         if success:
-            cache = await self.get_kv_data("binding_cache", {})
-            cache[str(website_user_id)] = user_qq_id
-            await self.put_kv_data("binding_cache", cache)
+            await self._update_binding_cache(website_user_id, user_qq_id)
             await self._send_success_pm(event, user_qq_id, website_user_id)
         
         yield event.plain_result(message)
@@ -309,9 +312,7 @@ class NewApiSuitePlugin(Star):
         
         reply = ""
         if success:
-            cache = await self.get_kv_data("binding_cache", {})
-            cache.pop(str(website_user_id), None)
-            await self.put_kv_data("binding_cache", cache)
+            await self._update_binding_cache(website_user_id, None)
             reply = self.t("unbind.success", site_id=website_user_id, qq=binding_info['qq_id'])
         else:
             if binding_info is None:
@@ -346,16 +347,21 @@ class NewApiSuitePlugin(Star):
         """(管理员) 智能识别 @ 提及、网站ID或QQ号，并调整用户显示额度。"""
         at_qq = self._extract_at_qq(event)
         if at_qq is not None:
-            # @ 场景：目标为 @，金额落在第一个文本参数（@ 不进入命令参数）
+            # @ 场景：目标为 @ 提及的 QQ。
+            # 注意：At 段在 AstrBot 的 message_str 中会变成 "@昵称(QQ)" 文本并占据 identifier 位置，
+            # 真正金额由 AstrBot 解析到 display_adjustment（float），故此处不解析 identifier。
             target_id = at_qq
-            amount = self._parse_float_safe(identifier)
         else:
+            # 非 @ 场景：目标为数字 ID（网站ID 或 QQ号）
             target_id = self._parse_int_safe(identifier)
-            amount = display_adjustment
+
         if target_id is None:
             yield event.plain_result(self.t("common.at_or_id_required"))
             return
-        if amount is None:
+
+        # 金额统一取 display_adjustment（AstrBot 已把数字参数转为 float）；0 视为未提供（调整 0 额度无意义）
+        amount = display_adjustment
+        if amount == 0.0:
             yield event.plain_result(self.t("common.amount_required"))
             return
 
@@ -510,18 +516,21 @@ class NewApiSuitePlugin(Star):
         show_qq = bool(conf.get('show_qq', True))
 
         # 缓存所有有消耗用户的绑定关系到 KV（单个 dict 键），避免每次查 DB
-        cache = await self.get_kv_data("binding_cache", {}) if show_qq else {}
-        cache_updated = False
+        # 加锁保护读-改-写，避免与绑定/解绑的缓存更新互相覆盖
+        cache: dict = {}
         if show_qq:
-            for s in stats:
-                user_id = str(s["user_id"])
-                if user_id not in cache:
-                    binding = await self.core.get_user_by_website_id(s["user_id"])
-                    if binding:
-                        cache[user_id] = binding['qq_id']
-                        cache_updated = True
-            if cache_updated:
-                await self.put_kv_data("binding_cache", cache)
+            async with self._kv_lock:
+                cache = await self.get_kv_data("binding_cache", {}) or {}
+                cache_updated = False
+                for s in stats:
+                    user_id = str(s["user_id"])
+                    if user_id not in cache:
+                        binding = await self.core.get_user_by_website_id(s["user_id"])
+                        if binding:
+                            cache[user_id] = binding['qq_id']
+                            cache_updated = True
+                if cache_updated:
+                    await self.put_kv_data("binding_cache", cache)
 
         lines = []
         medals = ["🥇", "🥈", "🥉"]
@@ -586,9 +595,7 @@ class NewApiSuitePlugin(Star):
         success, _ = await self.core.purge_user_binding(website_user_id)
 
         if success:
-            cache = await self.get_kv_data("binding_cache", {})
-            cache.pop(str(website_user_id), None)
-            await self.put_kv_data("binding_cache", cache)
+            await self._update_binding_cache(website_user_id, None)
             logger.info(f"用户 {user_id} (网站ID: {website_user_id}) 的退群净化仪式成功完成。" )
             
             try:
