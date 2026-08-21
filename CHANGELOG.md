@@ -4,6 +4,17 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.26] - 2026-08-20
+
+### 新增
+- OpenID 绑定支持：`binding_settings` 新增 `enable_openid_binding` 开关（默认关）。开启后，官方机器人（sender 为 OpenID 字符串）可直接 `/绑定 [网站ID]`，绑定关系独立存储于新表 `newapi_openid_bindings`（openid ↔ website_user_id），并自动晋升用户组；解绑/退群净化会同步清理 OpenID 绑定。
+- 打劫支持文本目标：`/打劫` 除 @ 提及外，现支持直接输入 QQ 号（数字）或 OpenID（字符串，需开启 `enable_openid_binding`）作为目标。
+- 消耗榜开放给所有用户：移除 `/消耗榜` 的 ADMIN 权限限制。
+
+### 修复
+- 修复打劫报 `'<' not supported between instances of 'str' and 'int'`：打劫并发锁的排序键统一转为 str，避免 OpenID(str) 与网站ID(int) 混合排序崩溃；打劫者身份改用 `get_user_by_identity` 同时兼容 QQ 号与 OpenID，日志键对 OpenID 用户取 website_user_id 以兼容 bigint 列。
+- `require_binding` 装饰器改用 `get_user_by_identity`，同时支持 QQ 号与 OpenID 身份查找。
+
 ## [1.0.25] - 2026-08-20
 
 ### 修复

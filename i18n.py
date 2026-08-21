@@ -38,6 +38,7 @@ _TRANSLATIONS = {
         "bind.user_blacklisted": "审核失败：您的QQ {qq} 已被管理员列入禁止绑定名单，无法绑定。",
         "bind.id_taken": "审核失败：ID {site_id} 已被另一位用户绑定，无法操作。",
         "bind.success": "恭喜您！绑定成功！\n您的QQ现已与网站ID {site_id} 绑定。\n已自动为您晋升至【{group}】分组。",
+        "bind.openid_success": "恭喜您！绑定成功！\n您的OpenID {openid} 现已与网站ID {site_id} 绑定。\n已自动为您晋升至【{group}】分组。",
         "bind.failed": "绑定过程中发生未知错误，操作已自动撤销，请联系管理员。",
         # 签到
         "check_in.disabled": "抱歉，每日签到功能当前未开启。",
@@ -111,6 +112,7 @@ _TRANSLATIONS = {
         "bind.user_blacklisted": "Check failed: your QQ {qq} has been blacklisted; unable to bind.",
         "bind.id_taken": "Check failed: ID {site_id} is already bound to another user.",
         "bind.success": "Congratulations! Binding successful!\nYour QQ is now bound to website ID {site_id}.\nYou've been promoted to group 【{group}】.",
+        "bind.openid_success": "Congratulations! Binding successful!\nYour OpenID {openid} is now bound to website ID {site_id}.\nYou've been promoted to group 【{group}】.",
         "bind.failed": "An unknown error occurred during binding; the operation was rolled back. Please contact the admin.",
         "check_in.disabled": "Sorry, daily check-in is currently disabled.",
         "check_in.already": "You've already checked in today, come back tomorrow!",

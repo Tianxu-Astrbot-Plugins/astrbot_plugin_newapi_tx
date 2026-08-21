@@ -201,6 +201,18 @@ class NewApiCore:
                   UNIQUE KEY `website_user_id` (`website_user_id`)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
                 """)
+            # OpenID 绑定表（独立于 QQ 绑定，用于官机 openid 场景）
+            await self.execute_query("""
+            CREATE TABLE IF NOT EXISTS `newapi_openid_bindings` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `openid` varchar(64) NOT NULL COMMENT '官方机器人 OpenID',
+              `website_user_id` int(11) NOT NULL,
+              `binding_time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `openid` (`openid`),
+              UNIQUE KEY `website_user_id` (`website_user_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """)
             logger.info("[NewAPI Utils] MySQL 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -250,6 +262,15 @@ class NewApiCore:
                   last_check_in_time TEXT
                 );
                 """)
+            # OpenID 绑定表（独立于 QQ 绑定，用于官机 openid 场景）
+            await self._execute_sqlite("""
+            CREATE TABLE IF NOT EXISTS newapi_openid_bindings (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              openid TEXT NOT NULL UNIQUE,
+              website_user_id INTEGER NOT NULL UNIQUE,
+              binding_time TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            """)
             logger.info("[NewAPI Utils] SQLite 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -403,6 +424,49 @@ class NewApiCore:
         return await self.execute_query(
             "SELECT * FROM newapi_bindings WHERE website_user_id = %s", (website_user_id,), fetch='one'
         )
+
+    async def get_user_by_openid(self, openid: str) -> Optional[Dict]:
+        """通过 OpenID 查找绑定（newapi_openid_bindings 表）。"""
+        return await self.execute_query(
+            "SELECT * FROM newapi_openid_bindings WHERE openid = %s", (openid,), fetch='one'
+        )
+
+    async def get_openid_by_website_id(self, website_user_id: int) -> Optional[Dict]:
+        """通过网站用户 ID 查找 OpenID 绑定。"""
+        return await self.execute_query(
+            "SELECT * FROM newapi_openid_bindings WHERE website_user_id = %s", (website_user_id,), fetch='one'
+        )
+
+    async def insert_openid_binding(self, openid: str, website_user_id: int) -> int:
+        """插入 OpenID 绑定记录。"""
+        return await self.execute_query(
+            "INSERT INTO newapi_openid_bindings (openid, website_user_id) VALUES (%s, %s)",
+            (openid, website_user_id)
+        )
+
+    async def delete_openid_binding(self, *, openid: Optional[str] = None,
+                                    website_user_id: Optional[int] = None) -> int:
+        """删除 OpenID 绑定记录。"""
+        if openid:
+            return await self.execute_query(
+                "DELETE FROM newapi_openid_bindings WHERE openid = %s", (openid,)
+            )
+        if website_user_id:
+            return await self.execute_query(
+                "DELETE FROM newapi_openid_bindings WHERE website_user_id = %s", (website_user_id,)
+            )
+        return 0
+
+    async def get_user_by_identity(self, user_id) -> Optional[Dict]:
+        """按身份查找绑定：数字（QQ号）走 newapi_bindings，字符串（OpenID）走 newapi_openid_bindings。
+        
+        返回字段统一含 website_user_id，QQ 绑定额外含 qq_id，OpenID 绑定额外含 openid。
+        """
+        if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.strip().lstrip('-').isdigit()):
+            return await self.get_user_by_qq(int(user_id))
+        if isinstance(user_id, str) and user_id.strip():
+            return await self.get_user_by_openid(user_id.strip())
+        return None
 
     async def get_api_user_data(self, user_id: int) -> Optional[Dict]:
         response = await self.api_request("GET", f"/api/user/{user_id}")
@@ -624,30 +688,46 @@ class NewApiCore:
 
     async def purge_user_binding(self, website_user_id: int) -> Tuple[bool, Optional[Dict]]:
         binding_info = await self.get_user_by_website_id(website_user_id)
-        if not binding_info:
+        openid_binding = await self.get_openid_by_website_id(website_user_id)
+        if not binding_info and not openid_binding:
             logger.warning(f"净化请求失败：未找到网站ID {website_user_id} 的绑定记录。")
             return False, None
         try:
-            logger.info(f"开始净化网站ID {website_user_id} (QQ: {binding_info['qq_id']})...")
-            await self.revert_user_group(website_user_id)
-            rows_affected = await self.delete_binding(website_user_id=website_user_id)
-            if rows_affected > 0:
-                logger.info(f"净化成功：已删除网站ID {website_user_id} 的绑定记录。")
-                return True, binding_info
-            else:
-                logger.error(f"净化异常：记录存在但删除失败，数据库影响行数为0。")
-                return False, binding_info
+            if binding_info:
+                logger.info(f"开始净化网站ID {website_user_id} (QQ: {binding_info['qq_id']})...")
+                await self.revert_user_group(website_user_id)
+                await self.delete_binding(website_user_id=website_user_id)
+            if openid_binding:
+                logger.info(f"开始净化网站ID {website_user_id} (OpenID: {openid_binding['openid']})...")
+                await self.delete_openid_binding(website_user_id=website_user_id)
+            logger.info(f"净化成功：已删除网站ID {website_user_id} 的所有绑定记录。")
+            return True, (binding_info or openid_binding)
         except Exception as e:
             logger.error(f"执行净化网站ID {website_user_id} 的过程中发生未知错误: {e}", exc_info=True)
-            return False, binding_info
+            return False, (binding_info or openid_binding)
 
-    async def lookup_binding(self, identifier: int) -> Tuple[str, Optional[Dict]]:
-        binding = await self.get_user_by_website_id(identifier)
-        if binding:
-            return "WEBSITE_ID", binding
-        binding = await self.get_user_by_qq(identifier)
-        if binding:
-            return "QQ_ID", binding
+    async def lookup_binding(self, identifier) -> Tuple[str, Optional[Dict]]:
+        """智能查找绑定：int 按网站ID/QQ号，string 按 OpenID（若为数字字符串则回退到 int 查找）。"""
+        if isinstance(identifier, str):
+            # 字符串：先尝试 OpenID 匹配
+            binding = await self.get_user_by_openid(identifier)
+            if binding:
+                return "OPENID", binding
+            # 纯数字字符串 → 转为 int 走常规查找
+            if identifier.strip().lstrip('-').isdigit():
+                identifier = int(identifier)
+            else:
+                return "NOT_FOUND", None
+
+        # 数字：网站ID 或 QQ号
+        if isinstance(identifier, int):
+            binding = await self.get_user_by_website_id(identifier)
+            if binding:
+                return "WEBSITE_ID", binding
+            binding = await self.get_user_by_qq(identifier)
+            if binding:
+                return "QQ_ID", binding
+
         return "NOT_FOUND", None
 
     async def adjust_balance_by_identifier(self, identifier: int,

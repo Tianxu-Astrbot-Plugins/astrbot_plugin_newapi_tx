@@ -37,10 +37,11 @@ PLUGIN_VERSION = load_plugin_version()
 def require_binding(f):
     """
     检查命令发起者是否绑定网站ID，若未绑定则中断并提示，若已绑定则附加binding对象以便后续使用。
+    同时支持 QQ 号绑定（int）与 OpenID 绑定（str）。
     """
     @wraps(f)
     async def wrapper(self, event: AstrMessageEvent, *args, **kwargs):
-        user_qq_id = event.get_sender_id()
+        sender_id = event.get_sender_id()
         
         # 避免重复获取binding
         if hasattr(event, 'binding'):
@@ -48,7 +49,7 @@ def require_binding(f):
                 yield item
             return
 
-        binding = await self.core.get_user_by_qq(user_qq_id)
+        binding = await self.core.get_user_by_identity(sender_id)
 
         if not binding:
             yield event.plain_result(self.t("not_bound"))
@@ -233,8 +234,23 @@ class NewApiSuitePlugin(Star):
 
     @filter.command("绑定")
     async def handle_bind_command(self, event: AstrMessageEvent, website_user_id: int):
-        """处理用户绑定请求，并执行校验。"""
-        user_qq_id = event.get_sender_id()
+        """处理用户绑定请求，并执行校验。支持 QQ 号绑定 与（开启开关后）OpenID 绑定。"""
+        binding_conf = self.config.get('binding_settings', {})
+        sender_id = event.get_sender_id()
+        openid_enabled = binding_conf.get('enable_openid_binding', False)
+        # 官机环境 sender_id 为 openid 字符串（非纯数字）时，走 OpenID 绑定
+        is_openid_sender = (
+            openid_enabled
+            and isinstance(sender_id, str)
+            and not sender_id.strip().lstrip('-').isdigit()
+        )
+
+        if is_openid_sender:
+            openid = sender_id.strip()
+            yield event.plain_result(await self._perform_openid_binding(event, openid, website_user_id))
+            return
+
+        user_qq_id = sender_id
 
         error_message = (
             await self._check_self_binding(user_qq_id) or
@@ -313,7 +329,9 @@ class NewApiSuitePlugin(Star):
         reply = ""
         if success:
             await self._update_binding_cache(website_user_id, None)
-            reply = self.t("unbind.success", site_id=website_user_id, qq=binding_info['qq_id'])
+            # QQ 绑定显示 qq_id；仅 OpenID 绑定时显示 openid
+            identity = binding_info.get('qq_id', binding_info.get('openid'))
+            reply = self.t("unbind.success", site_id=website_user_id, qq=identity)
         else:
             if binding_info is None:
                 reply = self.t("unbind.not_found", site_id=website_user_id)
@@ -383,11 +401,11 @@ class NewApiSuitePlugin(Star):
 
     @filter.command("打劫")
     @require_group_whitelist
-    async def handle_heist_command(self, event: AstrMessageEvent):
-        """(娱乐) 对 @ 的目标发起打劫。"""
+    async def handle_heist_command(self, event: AstrMessageEvent, identifier: str = ""):
+        """(娱乐) 打劫目标：@ 提及，或输入 QQ 号 / OpenID（开启 openid 绑定后支持）。"""
         robber_qq_id = event.get_sender_id()
 
-        # 1. 提取目标QQ
+        # 1. 提取目标：优先 @ 提及，其次文本参数（QQ号 / 网站ID / OpenID）
         target_qq_ids = [
             seg.qq  # 从At消息段中提取qq号
             for seg in event.get_messages()
@@ -395,17 +413,28 @@ class NewApiSuitePlugin(Star):
         ]
 
         # 2. 校验
-        if not target_qq_ids:
-            yield event.plain_result(self.t("heist.no_target"))
-            return
         if len(target_qq_ids) > 1:
             yield event.plain_result(self.t("heist.too_many"))
             return
 
-        # 3. 获取受害者QQ号
-        victim_qq_id = target_qq_ids[0]
-        
-        status, details = await self.heist_handler.execute_heist(robber_qq_id, victim_qq_id)
+        if target_qq_ids:
+            victim_identifier = target_qq_ids[0]  # @：QQ 号
+        else:
+            raw = (identifier or "").strip()
+            if not raw:
+                yield event.plain_result(self.t("heist.no_target"))
+                return
+            # 文本参数：优先数字（QQ号/网站ID），否则视为 OpenID（需开启 openid 绑定）
+            if raw.lstrip('-').isdigit():
+                victim_identifier = int(raw)
+            else:
+                openid_conf = self.config.get('binding_settings', {})
+                if not openid_conf.get('enable_openid_binding', False):
+                    yield event.plain_result(self.t("heist.no_target"))
+                    return
+                victim_identifier = raw
+
+        status, details = await self.heist_handler.execute_heist(robber_qq_id, victim_identifier)
         
         # 4. 根据结果生成回复
         heist_conf = self.config.get('heist_settings', {})
@@ -428,23 +457,23 @@ class NewApiSuitePlugin(Star):
             case "SUCCESS":
                 reply = success_template.format(gain=details['gain'])
                 # 打劫成功后顺便更新余额缓存（抢劫者+受害者），供排行榜使用
-                robber_binding = await self.core.get_user_by_qq(robber_qq_id)
-                victim_binding = await self.core.get_user_by_qq(victim_qq_id)
+                robber_binding = await self.core.get_user_by_identity(robber_qq_id)
+                victim_binding = await self.core.get_user_by_identity(victim_identifier)
                 for b in (robber_binding, victim_binding):
                     if b:
                         data = await self.core.get_api_user_data(b['website_user_id'])
                         if data:
-                            self._balance_cache[b['website_user_id']] = (b['qq_id'], data.get('quota', 0))
+                            self._balance_cache[b['website_user_id']] = (b.get('qq_id', b.get('openid')), data.get('quota', 0))
             case "CRITICAL":
                 reply = critical_template.format(gain=details['gain'])
                 # 同上
-                robber_binding = await self.core.get_user_by_qq(robber_qq_id)
-                victim_binding = await self.core.get_user_by_qq(victim_qq_id)
+                robber_binding = await self.core.get_user_by_identity(robber_qq_id)
+                victim_binding = await self.core.get_user_by_identity(victim_identifier)
                 for b in (robber_binding, victim_binding):
                     if b:
                         data = await self.core.get_api_user_data(b['website_user_id'])
                         if data:
-                            self._balance_cache[b['website_user_id']] = (b['qq_id'], data.get('quota', 0))
+                            self._balance_cache[b['website_user_id']] = (b.get('qq_id', b.get('openid')), data.get('quota', 0))
             case "FAILURE":
                 reply = failure_template.format(penalty=details['penalty'])
             case "DISABLED":
@@ -452,7 +481,7 @@ class NewApiSuitePlugin(Star):
             case "ROBBER_NOT_BOUND":
                 reply = robber_not_bound_template
             case "VICTIM_NOT_FOUND":
-                reply = victim_not_found_template.format(victim_identifier=f" @{victim_qq_id}")
+                reply = victim_not_found_template.format(victim_identifier=f" {victim_identifier}")
             case "CANNOT_ROB_SELF":
                 reply = cannot_rob_self_template
             case "ATTEMPTS_EXCEEDED":
@@ -487,7 +516,6 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("消耗榜")
-    @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_consumption_leaderboard(self, event: AstrMessageEvent):
         """(管理员) 展示全站用户近 N 小时 token 消耗排行榜（用户名 + 已绑定则附 QQ 号）。"""
         conf = self.config.get('consumption_leaderboard_settings', {})
@@ -766,6 +794,53 @@ class NewApiSuitePlugin(Star):
             logger.error(f"绑定仪式中发生错误: {e}", exc_info=True)
             await self.core.delete_binding(qq_id=user_qq_id)
             return False, self.t("bind.failed")
+
+    async def _perform_openid_binding(self, event, openid: str, website_user_id: int) -> str:
+        """执行 OpenID 绑定（优先前检查冲突，写入 newapi_openid_bindings 表，晋升用户组）。"""
+        # 检查 OpenID 是否已被绑定
+        existing = await self.core.get_user_by_openid(openid)
+        if existing:
+            return self.t("bind.already_bound", site_id=existing['website_user_id'])
+
+        # 检查网站 ID 是否已被 OpenID 绑定
+        already = await self.core.get_openid_by_website_id(website_user_id)
+        if already:
+            return self.t("bind.id_taken", site_id=website_user_id)
+
+        # 检查网站用户是否存在
+        if not await self.core.get_api_user_data(website_user_id):
+            return self.t("bind.api_user_not_found", site_id=website_user_id)
+
+        # 网站黑名单
+        binding_conf = self.config.get('binding_settings', {})
+        blacklist = binding_conf.get('forbidden_website_ids', [])
+        forbidden_ids = set(int(i) for i in blacklist if str(i).lstrip('-').isdigit())
+        if website_user_id in forbidden_ids:
+            return self.t("bind.website_blacklisted", site_id=website_user_id)
+
+        try:
+            await self.core.insert_openid_binding(openid, website_user_id)
+            # 晋升用户组
+            target_group = binding_conf.get('binding_group', 'default')
+            api_user_data = await self.core.get_api_user_data(website_user_id)
+            if api_user_data and api_user_data.get('group') != target_group:
+                update_payload = {
+                    "id": website_user_id,
+                    "username": api_user_data.get("username"),
+                    "display_name": api_user_data.get("display_name"),
+                    "role": api_user_data.get("role"),
+                    "status": api_user_data.get("status"),
+                    "group": target_group
+                }
+                update_success = await self.core.update_api_user(update_payload)
+                if not update_success:
+                    raise Exception("API group update failed.")
+
+            return self.t("bind.openid_success", openid=openid, site_id=website_user_id, group=target_group)
+        except Exception as e:
+            logger.error(f"OpenID 绑定失败: {e}", exc_info=True)
+            await self.core.delete_openid_binding(openid=openid)
+            return self.t("bind.failed")
 
     async def _send_success_pm(self, event: AstrMessageEvent, user_qq_id: int, website_user_id: int):
         """如果配置允许，发送绑定成功私信。"""

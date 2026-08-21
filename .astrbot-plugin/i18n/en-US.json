@@ -29,7 +29,8 @@
       "min_qq_level": { "description": "Minimum QQ level allowed to bind" },
       "quota_display_ratio": { "description": "Quota display exchange rate (raw quota / this value)" },
       "forbidden_website_ids": { "description": "Blacklisted website IDs (only blocks new bindings, existing bindings unaffected)" },
-      "forbidden_user_ids": { "description": "Blacklisted QQ numbers (only blocks new bindings, existing bindings unaffected)" }
+      "forbidden_user_ids": { "description": "Blacklisted QQ numbers (only blocks new bindings, existing bindings unaffected)" },
+      "enable_openid_binding": { "description": "Enable official-bot OpenID binding: when enabled, binding uses OpenID instead of QQ number; OpenID bindings are stored in a separate table (newapi_openid_bindings); heist can target by OpenID" }
     },
     "check_in_settings": {
       "description": "Daily check-in feature",

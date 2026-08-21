@@ -34,7 +34,8 @@
             "min_qq_level": { "description": "允许绑定的最低QQ等级", "type": "int", "default": 16 },
             "quota_display_ratio": { "description": "额度显示汇率 (原始Quota / 此值)", "type": "int", "default": 500000 },
             "forbidden_website_ids": { "description": "禁止绑定的网站ID黑名单（仅拦截新增绑定，已绑定不受影响）", "type": "list", "default": [] },
-            "forbidden_user_ids": { "description": "禁止绑定的用户QQ黑名单（仅拦截新增绑定，已绑定不受影响）", "type": "list", "default": [] }
+            "forbidden_user_ids": { "description": "禁止绑定的用户QQ黑名单（仅拦截新增绑定，已绑定不受影响）", "type": "list", "default": [] },
+            "enable_openid_binding": { "description": "是否支持官机 OpenID 格式绑定：开启后绑定时使用 openid 而非 QQ 号，OpenID 绑定关系单独存储于 newapi_openid_bindings 表，且打劫支持以 openid 为目标", "type": "bool", "default": false }
         }
     },
     "check_in_settings": {
