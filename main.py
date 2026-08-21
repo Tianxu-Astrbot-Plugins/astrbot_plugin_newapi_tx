@@ -233,8 +233,18 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("绑定")
-    async def handle_bind_command(self, event: AstrMessageEvent, website_user_id: int):
+    async def handle_bind_command(self, event: AstrMessageEvent, website_user_id: str = ""):
         """处理用户绑定请求，并执行校验。支持 QQ 号绑定 与（开启开关后）OpenID 绑定。"""
+        # 网站ID 人工校验：缺失/非数字时给出人类可读提示，避免框架类型转换直接抛异常
+        raw_id = str(website_user_id or "").strip()
+        if not raw_id:
+            yield event.plain_result(self.t("bind.id_required"))
+            return
+        if not raw_id.isdigit():
+            yield event.plain_result(self.t("bind.id_invalid", input=raw_id))
+            return
+        site_id = int(raw_id)
+
         binding_conf = self.config.get('binding_settings', {})
         sender_id = event.get_sender_id()
         openid_enabled = binding_conf.get('enable_openid_binding', False)
@@ -247,7 +257,7 @@ class NewApiSuitePlugin(Star):
 
         if is_openid_sender:
             openid = sender_id.strip()
-            yield event.plain_result(await self._perform_openid_binding(event, openid, website_user_id))
+            yield event.plain_result(await self._perform_openid_binding(event, openid, site_id))
             return
 
         user_qq_id = sender_id
@@ -256,9 +266,9 @@ class NewApiSuitePlugin(Star):
             await self._check_self_binding(user_qq_id) or
             await self._check_qq_level(event, user_qq_id) or
             await self._check_user_blacklist(user_qq_id) or
-            await self._check_website_id_blacklist(website_user_id) or
-            await self._check_api_user_exists(website_user_id) or
-            await self._check_id_uniqueness(website_user_id)
+            await self._check_website_id_blacklist(site_id) or
+            await self._check_api_user_exists(site_id) or
+            await self._check_id_uniqueness(site_id)
         )
         
         if error_message:
@@ -267,11 +277,11 @@ class NewApiSuitePlugin(Star):
         
         yield event.plain_result(self.t("bind.validating"))
         
-        success, message = await self._perform_binding_ritual(user_qq_id, website_user_id)
+        success, message = await self._perform_binding_ritual(user_qq_id, site_id)
         
         if success:
-            await self._update_binding_cache(website_user_id, user_qq_id)
-            await self._send_success_pm(event, user_qq_id, website_user_id)
+            await self._update_binding_cache(site_id, user_qq_id)
+            await self._send_success_pm(event, user_qq_id, site_id)
         
         yield event.plain_result(message)
 
@@ -322,29 +332,48 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
     @filter.command("解绑")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_unbind_command(self, event: AstrMessageEvent, website_user_id: int):
+    async def handle_unbind_command(self, event: AstrMessageEvent, website_user_id: str = ""):
         """(管理员) 强制解除指定网站ID的绑定。"""
-        success, binding_info = await self.core.purge_user_binding(website_user_id)
+        # 人工校验：非数字时给出人类可读提示，避免框架类型转换直接抛异常
+        raw_id = str(website_user_id or "").strip()
+        if not raw_id:
+            yield event.plain_result(self.t("bind.id_required"))
+            return
+        if not raw_id.isdigit():
+            yield event.plain_result(self.t("bind.id_invalid", input=raw_id))
+            return
+        site_id = int(raw_id)
+
+        success, binding_info = await self.core.purge_user_binding(site_id)
         
         reply = ""
         if success:
-            await self._update_binding_cache(website_user_id, None)
+            await self._update_binding_cache(site_id, None)
             # QQ 绑定显示 qq_id；仅 OpenID 绑定时显示 openid
             identity = binding_info.get('qq_id', binding_info.get('openid'))
-            reply = self.t("unbind.success", site_id=website_user_id, qq=identity)
+            reply = self.t("unbind.success", site_id=site_id, qq=identity)
         else:
             if binding_info is None:
-                reply = self.t("unbind.not_found", site_id=website_user_id)
+                reply = self.t("unbind.not_found", site_id=site_id)
             else:
-                reply = self.t("unbind.failed", site_id=website_user_id)
+                reply = self.t("unbind.failed", site_id=site_id)
                 
         yield event.plain_result(reply)
 
     @filter.command("查询")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_universal_lookup(self, event: AstrMessageEvent, identifier: int):
+    async def handle_universal_lookup(self, event: AstrMessageEvent, identifier: str = ""):
         """(管理员) 智能查询，自动识别网站ID或QQ号。"""
-        id_type, binding = await self.core.lookup_binding(identifier)
+        raw_id = str(identifier or "").strip()
+        if not raw_id:
+            yield event.plain_result(self.t("common.at_or_id_required"))
+            return
+        if not raw_id.isdigit():
+            yield event.plain_result(self.t("bind.id_invalid", input=raw_id))
+            return
+        target_id = int(raw_id)
+
+        id_type, binding = await self.core.lookup_binding(target_id)
         
         reply = ""
         match id_type:
@@ -353,7 +382,7 @@ class NewApiSuitePlugin(Star):
             case "QQ_ID":
                 reply = self.t("lookup.qq", qq=binding['qq_id'], site_id=binding['website_user_id'], time=binding['binding_time'].strftime('%Y-%m-%d %H:%M:%S'))
             case "NOT_FOUND":
-                reply = self.t("lookup.not_found", id=identifier)
+                reply = self.t("lookup.not_found", id=target_id)
         
         yield event.plain_result(reply)
 

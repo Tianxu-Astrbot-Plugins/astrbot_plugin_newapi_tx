@@ -30,6 +30,8 @@ _TRANSLATIONS = {
         "query_other.label_qq": "QQ号",
         "query_other.success": "✅ 查询成功！\n--------------------\n输入类型: {label}\n{label}: {id}\n绑定的网站ID: {site_id}\n当前剩余额度: {quota}",
         # 绑定
+        "bind.id_required": "请提供要绑定的网站ID。\n用法：`/绑定 [你的网站ID]`（纯数字），例如 `/绑定 1234`。",
+        "bind.id_invalid": "❌ 网站ID应为纯数字，你输入的「{input}」无法识别。\n请检查后重试，例如：`/绑定 1234`。",
         "bind.validating": "验证通过，执行绑定...",
         "bind.already_bound": "您好，您的QQ已经与网站ID {site_id} 签订了契约，无需重复绑定。",
         "bind.qq_level_low": "抱歉，您的QQ等级({level})未达到所要求的 {min_level} 级，暂时无法绑定。",
@@ -104,6 +106,8 @@ _TRANSLATIONS = {
         "query_other.label_website": "Website ID",
         "query_other.label_qq": "QQ",
         "query_other.success": "✅ Query successful!\n--------------------\nInput type: {label}\n{label}: {id}\nBound website ID: {site_id}\nCurrent remaining quota: {quota}",
+        "bind.id_required": "Please provide your website ID.\nUsage: `/绑定 [your website ID]` (digits only), e.g. `/绑定 1234`.",
+        "bind.id_invalid": "❌ The website ID must be numeric, but \"{input}\" cannot be recognized.\nPlease check and retry, e.g. `/绑定 1234`.",
         "bind.validating": "Validation passed, binding...",
         "bind.already_bound": "Your QQ is already bound to website ID {site_id}, no need to bind again.",
         "bind.qq_level_low": "Sorry, your QQ level ({level}) is below the required {min_level}; unable to bind.",
