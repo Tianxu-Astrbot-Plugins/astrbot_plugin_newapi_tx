@@ -123,7 +123,7 @@
             "robber_not_bound_template": { 
                 "description": "打劫者未绑定的提示", 
                 "type": "text", 
-                "default": "🤔 你自己都还没绑定账号，抢来的钱往哪儿放呢？快去 /绑定 吧！" 
+                "default": "🤔 你自己都还没绑定账号，抢来的钱往哪儿放呢？快去发送「绑定 你的网站ID」完成绑定吧！" 
             },
             "cooldown_template": {
                 "description": "打劫冷却中的提示。可用变量: {remaining_time}",
