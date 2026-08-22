@@ -386,6 +386,49 @@ class NewApiSuitePlugin(Star):
         
         yield event.plain_result(reply)
 
+    @filter.command("new-tx")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def handle_db_transfer(self, event: AstrMessageEvent, action: str = ""):
+        """(管理员) 数据库导入导出：导出=当前库内容写入迁移文件；导入=迁移文件覆盖当前库。"""
+        act = str(action or "").strip()
+        if act not in ("导出", "导入"):
+            yield event.plain_result(self.t("db_transfer.usage"))
+            return
+
+        act_label = self.t("db_transfer.act_export") if act == "导出" else self.t("db_transfer.act_import")
+        yield event.plain_result(self.t("db_transfer.working", action=act_label))
+
+        try:
+            if act == "导出":
+                result = await self.core.export_database()
+                done_key = "db_transfer.export_done"
+            else:
+                result = await self.core.import_database()
+                done_key = "db_transfer.import_done"
+            detail = self._format_transfer_counts(result["counts"])
+            total = sum(result["counts"].values())
+            reply = self.t(done_key, detail=detail, total=total)
+        except FileNotFoundError:
+            reply = self.t("db_transfer.no_file")
+        except Exception as e:
+            logger.error(f"数据库{act}操作失败: {e}", exc_info=True)
+            reply = self.t("db_transfer.failed", action=act_label, err=e)
+
+        yield event.plain_result(reply)
+
+    def _format_transfer_counts(self, counts: dict) -> str:
+        """把各表行数格式化为多行人类可读明细。"""
+        labels = {
+            "newapi_bindings": "db_transfer.label_bindings",
+            "newapi_openid_bindings": "db_transfer.label_openid_bindings",
+            "newapi_check_in_state": "db_transfer.label_check_in_state",
+            "daily_heist_log": "db_transfer.label_heist_log",
+        }
+        return "\n".join(
+            self.t("db_transfer.detail_line", label=self.t(key), count=counts.get(table, 0))
+            for table, key in labels.items()
+        )
+
     @filter.command("调整余额")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_adjust_balance(

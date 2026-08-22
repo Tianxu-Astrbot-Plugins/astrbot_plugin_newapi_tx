@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.29] - 2026-08-20
+
+### 新增
+- 数据库导入导出（管理员）：新增 `new-tx 导出` / `new-tx 导入` 指令，经独立迁移文件 `transfer.db` 在 MySQL 与 SQLite 间搬运数据。导出=把当前数据库的绑定、OpenID 绑定、签到状态、打劫日志四张表整体写入迁移文件；导入=清空当前库对应表后写入文件内容。典型用法：MySQL 模式下「导出」→ 切换为 SQLite 模式 → 「导入」即完成 MySQL→SQLite 迁移，反向同理。
+
 ## [1.0.28] - 2026-08-20
 
 ### 修复

@@ -87,6 +87,20 @@ _TRANSLATIONS = {
         # 退群公告
         "leave.announcement": "成员【{nickname}】({qq}) 已主动退出群聊。\n其绑定的网站数据已自动解绑，用户组已重置。",
         "kick.announcement": "成员【{nickname}】({qq}) 已被管理员【{op}】移出群聊。\n其绑定的网站数据已自动解绑，用户组已重置。",
+        # 数据库导入导出
+        "db_transfer.usage": "用法：发送「new-tx 导出」把当前数据库内容导出到迁移文件，或「new-tx 导入」把迁移文件导入当前数据库。\n⚠️ 导入为覆盖操作：当前库中绑定 / 签到状态 / 打劫日志表会先清空再写入文件内容。",
+        "db_transfer.act_export": "导出",
+        "db_transfer.act_import": "导入",
+        "db_transfer.working": "🔄 正在{action}数据库，请稍候…",
+        "db_transfer.detail_line": "{label}：{count} 条",
+        "db_transfer.export_done": "✅ 导出完成，已写入迁移文件 transfer.db：\n{detail}\n共 {total} 条记录。",
+        "db_transfer.import_done": "✅ 导入完成，当前数据库已更新：\n{detail}\n共 {total} 条记录。",
+        "db_transfer.no_file": "❌ 未找到迁移文件（transfer.db），请先执行「new-tx 导出」。",
+        "db_transfer.failed": "❌ 数据库{action}失败：{err}\n请查看后台日志。",
+        "db_transfer.label_bindings": "QQ 绑定",
+        "db_transfer.label_openid_bindings": "OpenID 绑定",
+        "db_transfer.label_check_in_state": "签到状态",
+        "db_transfer.label_heist_log": "打劫日志",
     },
     "en": {
         "common.at_or_id_required": "Please @ a user or enter a website ID / QQ number.",
@@ -155,6 +169,20 @@ _TRANSLATIONS = {
         "consumption.line_bound_quota": "{prefix} {username} [QQ:{qq}] → {tokens} tokens · {quota} quota",
         "leave.announcement": "Member 【{nickname}】({qq}) left the group.\nTheir binding has been removed and user group reset.",
         "kick.announcement": "Member 【{nickname}】({qq}) was removed by admin 【{op}】.\nTheir binding has been removed and user group reset.",
+        # Database import/export
+        "db_transfer.usage": "Usage: send \"new-tx 导出\" to export the current database into the transfer file, or \"new-tx 导入\" to import the transfer file into the current database.\n⚠️ Import is destructive: bindings / check-in states / heist logs in the current database will be cleared and replaced by the file contents.",
+        "db_transfer.act_export": "export",
+        "db_transfer.act_import": "import",
+        "db_transfer.working": "🔄 Database {action} in progress, please wait…",
+        "db_transfer.detail_line": "{label}: {count}",
+        "db_transfer.export_done": "✅ Export finished, written to transfer file transfer.db:\n{detail}\nTotal {total} records.",
+        "db_transfer.import_done": "✅ Import finished, current database updated:\n{detail}\nTotal {total} records.",
+        "db_transfer.no_file": "❌ Transfer file (transfer.db) not found. Please run \"new-tx 导出\" first.",
+        "db_transfer.failed": "❌ Database {action} failed: {err}\nPlease check the logs.",
+        "db_transfer.label_bindings": "QQ bindings",
+        "db_transfer.label_openid_bindings": "OpenID bindings",
+        "db_transfer.label_check_in_state": "Check-in states",
+        "db_transfer.label_heist_log": "Heist logs",
     },
 }
 

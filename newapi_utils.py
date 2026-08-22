@@ -364,6 +364,155 @@ class NewApiCore:
         return str(val)
 
     # ------------------------------------------------------------------ #
+    #  数据库导入导出（经 transfer.db 迁移文件在双引擎间搬运）          #
+    # ------------------------------------------------------------------ #
+
+    # 参与迁移的表（顺序即处理顺序）
+    _TRANSFER_TABLES = (
+        "newapi_bindings",
+        "newapi_openid_bindings",
+        "newapi_check_in_state",
+        "daily_heist_log",
+    )
+
+    # 迁移文件（SQLite）中的建表语句，与在线 SQLite 模式结构一致
+    _TRANSFER_SQLITE_DDL = {
+        "newapi_bindings": """
+            CREATE TABLE IF NOT EXISTS newapi_bindings (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              qq_id INTEGER NOT NULL UNIQUE,
+              website_user_id INTEGER NOT NULL UNIQUE,
+              binding_time TEXT NOT NULL DEFAULT (datetime('now')),
+              last_check_in_time TEXT
+            )
+        """,
+        "newapi_openid_bindings": """
+            CREATE TABLE IF NOT EXISTS newapi_openid_bindings (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              openid TEXT NOT NULL UNIQUE,
+              website_user_id INTEGER NOT NULL UNIQUE,
+              binding_time TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """,
+        "newapi_check_in_state": """
+            CREATE TABLE IF NOT EXISTS newapi_check_in_state (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              website_user_id INTEGER NOT NULL UNIQUE,
+              last_check_in_time TEXT
+            )
+        """,
+        "daily_heist_log": """
+            CREATE TABLE IF NOT EXISTS daily_heist_log (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              robber_qq_id INTEGER NOT NULL,
+              victim_website_id INTEGER NOT NULL,
+              heist_time TEXT NOT NULL DEFAULT (datetime('now')),
+              outcome TEXT NOT NULL,
+              amount INTEGER NOT NULL
+            )
+        """,
+    }
+
+    async def _get_transfer_db_path(self) -> str:
+        """获取迁移文件路径：{AstrBot数据目录}/plugin_data/astrbot_plugin_newapi_tx/transfer.db"""
+        try:
+            from astrbot.core.utils.io import get_astrbot_data_path
+        except ImportError:
+            from astrbot.api.provider import get_astrbot_data_path
+        plugin_dir = os.path.join(get_astrbot_data_path(), "plugin_data", "astrbot_plugin_newapi_tx")
+        os.makedirs(plugin_dir, exist_ok=True)
+        return os.path.join(plugin_dir, "transfer.db")
+
+    async def export_database(self) -> Dict[str, Any]:
+        """导出：把【当前活动数据库】的全部业务表内容写入迁移文件 transfer.db（整文件覆盖）。
+
+        返回 {"path": 迁移文件路径, "counts": {表名: 行数}}。
+        """
+        path = await self._get_transfer_db_path()
+
+        # 1. 从当前引擎读取全量数据
+        data: Dict[str, list] = {}
+        for t in self._TRANSFER_TABLES:
+            data[t] = await self.execute_query(f"SELECT * FROM `{t}`", fetch='all') or []
+
+        # 2. 覆盖写入迁移 SQLite 文件
+        if os.path.exists(path):
+            os.remove(path)
+        counts: Dict[str, int] = {}
+        conn = await aiosqlite.connect(path)
+        try:
+            for t in self._TRANSFER_TABLES:
+                await conn.execute(self._TRANSFER_SQLITE_DDL[t])
+                rows = data[t]
+                for r in rows:
+                    cols = list(r.keys())
+                    vals = [
+                        self._format_datetime_for_sqlite(r[c]) if isinstance(r[c], datetime) else r[c]
+                        for c in cols
+                    ]
+                    ph = ", ".join("?" for _ in cols)
+                    await conn.execute(
+                        f"INSERT INTO `{t}` ({', '.join(f'`{c}`' for c in cols)}) VALUES ({ph})", vals
+                    )
+                counts[t] = len(rows)
+            await conn.commit()
+        finally:
+            await conn.close()
+
+        logger.info(f"[NewAPI Utils] 数据库导出完成 → {path}，各表行数: {counts}")
+        return {"path": path, "counts": counts}
+
+    async def import_database(self) -> Dict[str, Any]:
+        """导入：读取迁移文件 transfer.db，【清空当前活动数据库】对应表后整体写入。
+
+        返回 {"path": 迁移文件路径, "counts": {表名: 行数}}。
+        ⚠️ 破坏性操作：目标库中这四张表的现有数据会被替换。
+        """
+        path = await self._get_transfer_db_path()
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"迁移文件不存在: {path}")
+
+        # 1. 从迁移文件读取全量数据（缺表视为空）
+        data: Dict[str, list] = {}
+        conn = await aiosqlite.connect(path)
+        try:
+            conn.row_factory = aiosqlite.Row
+            for t in self._TRANSFER_TABLES:
+                cur = await conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,)
+                )
+                if await cur.fetchone() is None:
+                    data[t] = []
+                    continue
+                cur = await conn.execute(f"SELECT * FROM `{t}`")
+                data[t] = [dict(r) for r in await cur.fetchall()]
+        finally:
+            await conn.close()
+
+        # 2. 清空目标表后逐行写入当前引擎
+        counts: Dict[str, int] = {}
+        for t in self._TRANSFER_TABLES:
+            rows = data[t]
+            await self.execute_query(f"DELETE FROM `{t}`")
+            for r in rows:
+                cols = list(r.keys())
+                if self.db_mode == "sqlite":
+                    vals = [
+                        self._format_datetime_for_sqlite(r[c]) if isinstance(r[c], datetime) else r[c]
+                        for c in cols
+                    ]
+                else:  # MySQL：datetime 对象可直接交由驱动处理
+                    vals = [r[c] for c in cols]
+                ph = ", ".join("%s" for _ in cols)  # _execute_sqlite 会自动转 ?
+                await self.execute_query(
+                    f"INSERT INTO `{t}` ({', '.join(f'`{c}`' for c in cols)}) VALUES ({ph})", tuple(vals)
+                )
+            counts[t] = len(rows)
+
+        logger.info(f"[NewAPI Utils] 数据库导入完成 ← {path}，各表行数: {counts}")
+        return {"path": path, "counts": counts}
+
+    # ------------------------------------------------------------------ #
     #  API 请求                                                       #
     # ------------------------------------------------------------------ #
 
