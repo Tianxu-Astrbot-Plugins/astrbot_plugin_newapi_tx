@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.30] - 2026-08-22
+
+### 修复
+- 修复导入/导出与 SQLite 模式在部分 AstrBot 版本报 `cannot import name 'get_astrbot_data_path'`：数据目录解析改为多版本兼容链（多个官方 API → StarTools → 由插件安装位置推导兜底），不再依赖单一导入路径。
+
 ## [1.0.29] - 2026-08-20
 
 ### 新增

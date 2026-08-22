@@ -110,17 +110,43 @@ class NewApiCore:
             self.db_pool = None
             return False
 
+    def _resolve_plugin_data_dir(self) -> str:
+        """解析插件数据目录 {AstrBot数据目录}/plugin_data/astrbot_plugin_newapi_tx。
+
+        多版本 AstrBot 兼容：依次尝试各官方 API → StarTools → 由插件安装位置推导。
+        """
+        # 1) 各版本提供的数据目录 API
+        candidates = (
+            ("astrbot.core.utils.io", "get_astrbot_data_path"),
+            ("astrbot.core.utils.astrbot_path", "get_astrbot_data_path"),
+            ("astrbot.api.provider", "get_astrbot_data_path"),
+            ("astrbot.api", "get_astrbot_data_path"),
+        )
+        for mod_name, attr in candidates:
+            try:
+                mod = __import__(mod_name, fromlist=[attr])
+                fn = getattr(mod, attr, None)
+                if callable(fn):
+                    return os.path.join(str(fn()), "plugin_data", "astrbot_plugin_newapi_tx")
+            except Exception:
+                continue
+        # 2) 新版 StarTools.get_data_dir
+        try:
+            from astrbot.core.star.star_tools import StarTools
+            path = str(StarTools.get_data_dir("astrbot_plugin_newapi_tx"))
+            os.makedirs(path, exist_ok=True)
+            return path
+        except Exception:
+            pass
+        # 3) 兜底：由插件文件位置推导（插件安装在 {数据目录}/plugins/<插件名>/ 下）
+        plugin_root = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.dirname(os.path.dirname(plugin_root))
+        return os.path.join(data_dir, "plugin_data", "astrbot_plugin_newapi_tx")
+
     async def _init_sqlite(self) -> bool:
         """初始化 SQLite 单文件数据库。"""
         try:
-            # 尝试获取 AstrBot 数据目录（插件数据存储在 plugin_data/<plugin_name>/ 下）
-            try:
-                from astrbot.core.utils.io import get_astrbot_data_path
-            except ImportError:
-                from astrbot.api.provider import get_astrbot_data_path
-
-            data_path = get_astrbot_data_path()
-            plugin_dir = os.path.join(data_path, "plugin_data", "astrbot_plugin_newapi_tx")
+            plugin_dir = self._resolve_plugin_data_dir()
             os.makedirs(plugin_dir, exist_ok=True)
             db_path = os.path.join(plugin_dir, "newapi.db")
 
@@ -415,11 +441,7 @@ class NewApiCore:
 
     async def _get_transfer_db_path(self) -> str:
         """获取迁移文件路径：{AstrBot数据目录}/plugin_data/astrbot_plugin_newapi_tx/transfer.db"""
-        try:
-            from astrbot.core.utils.io import get_astrbot_data_path
-        except ImportError:
-            from astrbot.api.provider import get_astrbot_data_path
-        plugin_dir = os.path.join(get_astrbot_data_path(), "plugin_data", "astrbot_plugin_newapi_tx")
+        plugin_dir = self._resolve_plugin_data_dir()
         os.makedirs(plugin_dir, exist_ok=True)
         return os.path.join(plugin_dir, "transfer.db")
 
