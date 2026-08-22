@@ -695,6 +695,10 @@ class NewApiSuitePlugin(Star):
             lines.append(line)
 
         reply = self.t("consumption.header", top_n=top_n, hours=hours, lines="\n".join(lines))
+        # 指纹日志：确认可见回复由本实例/本段代码渲染（排查重复加载的旧实例分流）
+        logger.info(
+            f"[消耗榜] 实例#{id(self) % 0xffff} 渲染首行={lines[0] if lines else '(空)'}"
+        )
         yield event.plain_result(reply)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
