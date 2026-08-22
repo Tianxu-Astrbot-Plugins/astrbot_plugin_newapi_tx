@@ -619,18 +619,23 @@ class NewApiSuitePlugin(Star):
         # 加锁保护读-改-写，避免与绑定/解绑的缓存更新互相覆盖
         cache: dict = {}
         if show_qq:
-            async with self._kv_lock:
-                cache = await self.get_kv_data("binding_cache", {}) or {}
-                cache_updated = False
-                for s in stats:
-                    user_id = str(s["user_id"])
-                    if user_id not in cache:
-                        binding = await self.core.get_user_by_website_id(s["user_id"])
-                        if binding:
-                            cache[user_id] = binding['qq_id']
-                            cache_updated = True
-                if cache_updated:
-                    await self.put_kv_data("binding_cache", cache)
+            try:
+                async with self._kv_lock:
+                    cache = await self.get_kv_data("binding_cache", {}) or {}
+                    cache_updated = False
+                    for s in stats:
+                        user_id = str(s["user_id"])
+                        if user_id not in cache:
+                            binding = await self.core.get_user_by_website_id(s["user_id"])
+                            if binding:
+                                cache[user_id] = binding['qq_id']
+                                cache_updated = True
+                    if cache_updated:
+                        await self.put_kv_data("binding_cache", cache)
+            except Exception as e:
+                # 预填充失败不阻断出榜：下方展示层会对上榜用户逐条回退查库
+                logger.warning(f"[消耗榜] 绑定缓存预填充失败（将逐条回退查询）: {e}")
+            logger.info(f"[消耗榜] show_qq={show_qq} 缓存大小={len(cache)} 本窗口用户数={len(stats)}")
 
         lines = []
         medals = ["🥇", "🥈", "🥉"]
@@ -639,6 +644,22 @@ class NewApiSuitePlugin(Star):
             prefix = medals[idx] if idx < 3 else f"{rank}."
             username = s.get("username") or str(s["user_id"])
             qq_id = cache.get(str(s["user_id"])) if show_qq else None
+            if show_qq and qq_id is None:
+                # 展示层兜底：上榜用户缓存未命中时逐条回退查库，
+                # 避免缓存被清空（如插件重载）或预填充失败导致整榜无 QQ 号
+                try:
+                    binding = await self.core.get_user_by_website_id(s["user_id"])
+                    if binding:
+                        qq_id = binding['qq_id']
+                        try:
+                            async with self._kv_lock:
+                                fresh = await self.get_kv_data("binding_cache", {}) or {}
+                                fresh[str(s["user_id"])] = qq_id
+                                await self.put_kv_data("binding_cache", fresh)
+                        except Exception as e:
+                            logger.warning(f"[消耗榜] 回写绑定缓存失败（不影响本次展示）: {e}")
+                except Exception as e:
+                    logger.warning(f"[消耗榜] 榜单用户 {s['user_id']} 绑定查询失败: {e}")
             show_bound = show_qq and qq_id is not None
             qq = str(qq_id) if show_bound else ""
             if show_quota:
