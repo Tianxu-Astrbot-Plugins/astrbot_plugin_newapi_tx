@@ -99,6 +99,10 @@
     "i18n_settings": {
       "description": "Language",
       "language": { "description": "Reply language" }
+    },
+    "debug_settings": {
+      "description": "Debug mode (keep off for daily use)",
+      "enabled": { "description": "When enabled, verbose diagnostic logs are emitted (e.g. per-line cache values / final values of the consumption board, full rendered text) to locate display issues" }
     }
   }
 }

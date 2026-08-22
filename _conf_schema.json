@@ -171,5 +171,16 @@
                 "default": "zh"
             }
         }
+    },
+    "debug_settings": {
+        "description": "调试模式（日常使用保持关闭）",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "开启后输出详细诊断日志：如消耗榜每行的缓存原始值/最终取值、兜底查询结果、完整渲染全文等，用于定位显示类问题",
+                "type": "bool",
+                "default": false
+            }
+        }
     }
 }

@@ -110,6 +110,10 @@ class NewApiSuitePlugin(Star):
         """翻译运行时消息。"""
         return translate(self.lang, key, **kwargs)
 
+    def _is_debug(self) -> bool:
+        """是否开启调试模式（debug_settings.enabled），动态读取便于随时切换。"""
+        return bool(self.config.get('debug_settings.enabled', False))
+
     def _command_group_allowed(self, event: AstrMessageEvent) -> bool:
         """判断当前消息是否命中群白名单：白名单未启用时一律放行。
 
@@ -642,11 +646,12 @@ class NewApiSuitePlugin(Star):
             except Exception as e:
                 # 预填充失败不阻断出榜：下方展示层会对上榜用户逐条回退查库
                 logger.warning(f"[消耗榜] 绑定缓存预填充失败（将逐条回退查询）: {e}")
-            sample = ",".join(f"{s['user_id']}→{type(s['user_id']).__name__}" for s in top[:3])
-            logger.info(
-                f"[消耗榜] show_qq={show_qq} 缓存大小={len(cache)} 窗口用户数={len(stats)} "
-                f"预填充查库={db_lookups}次 命中={db_hits}次 TOP3类型[{sample}]"
-            )
+            if self._is_debug():
+                sample = ",".join(f"{s['user_id']}→{type(s['user_id']).__name__}" for s in top[:3])
+                logger.info(
+                    f"[消耗榜][DEBUG] show_qq={show_qq} 缓存大小={len(cache)} 窗口用户数={len(stats)} "
+                    f"预填充查库={db_lookups}次 命中={db_hits}次 TOP3类型[{sample}]"
+                )
 
         lines = []
         medals = ["🥇", "🥈", "🥉"]
@@ -654,7 +659,10 @@ class NewApiSuitePlugin(Star):
             rank = idx + 1
             prefix = medals[idx] if idx < 3 else f"{rank}."
             username = s.get("username") or str(s["user_id"])
-            qq_id = cache.get(str(s["user_id"])) if show_qq else None
+            raw_cached = cache.get(str(s["user_id"])) if show_qq else None
+            if self._is_debug():
+                logger.info(f"[消耗榜][DEBUG] 行{rank} user={s['user_id']!r} 缓存原始值={raw_cached!r}")
+            qq_id = raw_cached
             if show_qq and qq_id is None:
                 # 展示层兜底：上榜用户缓存未命中时逐条回退查库，
                 # 避免缓存被清空（如插件重载）或预填充失败导致整榜无 QQ 号
@@ -662,7 +670,8 @@ class NewApiSuitePlugin(Star):
                     binding = await self.core.get_user_by_website_id(s["user_id"])
                     if binding:
                         qq_id = binding['qq_id']
-                        logger.info(f"[消耗榜] 兜底命中 user_id={s['user_id']} → QQ:{qq_id}")
+                        if self._is_debug():
+                            logger.info(f"[消耗榜][DEBUG] 兜底命中 user_id={s['user_id']} → QQ:{qq_id}")
                         try:
                             async with self._kv_lock:
                                 fresh = await self.get_kv_data("binding_cache", {}) or {}
@@ -671,10 +680,13 @@ class NewApiSuitePlugin(Star):
                         except Exception as e:
                             logger.warning(f"[消耗榜] 回写绑定缓存失败（不影响本次展示）: {e}")
                     else:
-                        logger.info(f"[消耗榜] 兜底未命中 user_id={s['user_id']}（数据库无此绑定行，类型={type(s['user_id']).__name__}）")
+                        if self._is_debug():
+                            logger.info(f"[消耗榜][DEBUG] 兜底未命中 user_id={s['user_id']}（数据库无此绑定行，类型={type(s['user_id']).__name__}）")
                 except Exception as e:
                     logger.warning(f"[消耗榜] 榜单用户 {s['user_id']} 绑定查询失败: {e}")
             show_bound = show_qq and qq_id is not None
+            if self._is_debug():
+                logger.info(f"[消耗榜][DEBUG] 行{rank} 最终 qq_id={qq_id!r} show_bound={show_bound}")
             qq = str(qq_id) if show_bound else ""
             if show_quota:
                 display_quota = (s.get("quota", 0) or 0) / ratio
@@ -696,9 +708,11 @@ class NewApiSuitePlugin(Star):
 
         reply = self.t("consumption.header", top_n=top_n, hours=hours, lines="\n".join(lines))
         # 指纹日志：确认可见回复由本实例/本段代码渲染（排查重复加载的旧实例分流）
-        logger.info(
-            f"[消耗榜] 实例#{id(self) % 0xffff} 渲染首行={lines[0] if lines else '(空)'}"
-        )
+        if self._is_debug():
+            logger.info(
+                f"[消耗榜][DEBUG] 实例#{id(self) % 0xffff} 渲染首行={lines[0] if lines else '(空)'}"
+            )
+            logger.info(f"[消耗榜][DEBUG] 实例#{id(self) % 0xffff} 渲染全文>>>\n{reply}\n<<<全文结束")
         yield event.plain_result(reply)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
