@@ -511,7 +511,13 @@ class NewApiCore:
         finally:
             await conn.close()
 
-        # 2. 清空目标表后逐行写入当前引擎
+        # 2. 安全防护：迁移文件四表全空时拒绝导入，防止误用空文件清空当前数据库
+        total_rows = sum(len(v) for v in data.values())
+        if total_rows == 0:
+            logger.error(f"[NewAPI Utils] 迁移文件 {path} 中没有任何数据，已拒绝导入。")
+            raise ValueError("迁移文件中没有任何数据")
+
+        # 3. 清空目标表后逐行写入当前引擎
         counts: Dict[str, int] = {}
         for t in self._TRANSFER_TABLES:
             rows = data[t]

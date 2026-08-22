@@ -410,6 +410,9 @@ class NewApiSuitePlugin(Star):
             reply = self.t(done_key, detail=detail, total=total)
         except FileNotFoundError:
             reply = self.t("db_transfer.no_file")
+        except ValueError:
+            # 迁移文件为空，安全防护拒绝导入
+            reply = self.t("db_transfer.empty_file")
         except Exception as e:
             logger.error(f"数据库{act}操作失败: {e}", exc_info=True)
             reply = self.t("db_transfer.failed", action=act_label, err=e)
