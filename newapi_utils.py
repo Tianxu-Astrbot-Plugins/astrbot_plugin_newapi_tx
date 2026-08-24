@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import time
 import httpx
@@ -34,6 +35,8 @@ class NewApiCore:
         self.api_admin_user_id: Optional[str] = None
         # 签到并发锁：按 website_user_id 串行化，防止同一账号并发签到绕过「今日已签到」检查（TOCTOU 重复领奖）
         self._check_in_locks: dict[int, asyncio.Lock] = {}
+        # 红包并发锁：按红包 ID 串行化领取动作，防止并发超抢/重复领取
+        self._red_packet_locks: dict[int, asyncio.Lock] = {}
         logger.info("[NewAPI Utils] 核心工具类已实例化，等待异步初始化...")
 
     @staticmethod
@@ -239,6 +242,36 @@ class NewApiCore:
               UNIQUE KEY `website_user_id` (`website_user_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
+            # 红包主表 + 领取记录表
+            await self.execute_query("""
+            CREATE TABLE IF NOT EXISTS `newapi_red_packets` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `creator_identity` varchar(64) NOT NULL COMMENT '发起人身份(QQ或OpenID)',
+              `total_raw` bigint(20) NOT NULL COMMENT '总原始额度',
+              `total_display` double NOT NULL,
+              `display_ratio` int(11) NOT NULL,
+              `grab_count` int(11) NOT NULL,
+              `remain_count` int(11) NOT NULL,
+              `shares_json` text NOT NULL COMMENT '预拆分份额(原始额度整数)',
+              `status` varchar(12) NOT NULL DEFAULT 'ACTIVE',
+              `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `expire_at` timestamp NULL DEFAULT NULL,
+              PRIMARY KEY (`id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """)
+            await self.execute_query("""
+            CREATE TABLE IF NOT EXISTS `newapi_red_packet_records` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `packet_id` int(11) NOT NULL,
+              `identity` varchar(64) NOT NULL COMMENT '领取人身份(QQ或OpenID)',
+              `website_user_id` int(11) NOT NULL,
+              `amount_raw` bigint(20) NOT NULL,
+              `grabbed_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              PRIMARY KEY (`id`),
+              UNIQUE KEY `packet_identity` (`packet_id`,`identity`),
+              KEY `idx_packet` (`packet_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """)
             logger.info("[NewAPI Utils] MySQL 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -297,6 +330,33 @@ class NewApiCore:
               binding_time TEXT NOT NULL DEFAULT (datetime('now'))
             );
             """)
+            # 红包主表 + 领取记录表
+            await self._execute_sqlite("""
+            CREATE TABLE IF NOT EXISTS newapi_red_packets (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              creator_identity TEXT NOT NULL,
+              total_raw INTEGER NOT NULL,
+              total_display REAL NOT NULL,
+              display_ratio INTEGER NOT NULL,
+              grab_count INTEGER NOT NULL,
+              remain_count INTEGER NOT NULL,
+              shares_json TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'ACTIVE',
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              expire_at TEXT
+            );
+            """)
+            await self._execute_sqlite("""
+            CREATE TABLE IF NOT EXISTS newapi_red_packet_records (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              packet_id INTEGER NOT NULL,
+              identity TEXT NOT NULL,
+              website_user_id INTEGER NOT NULL,
+              amount_raw INTEGER NOT NULL,
+              grabbed_at TEXT NOT NULL DEFAULT (datetime('now')),
+              UNIQUE (packet_id, identity)
+            );
+            """)
             logger.info("[NewAPI Utils] SQLite 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -308,17 +368,19 @@ class NewApiCore:
     # ------------------------------------------------------------------ #
 
     async def execute_query(self, query: str, args: Optional[Tuple] = None,
-                            fetch: Optional[str] = None) -> Any:
+                            fetch: Optional[str] = None,
+                            return_lastrowid: bool = False) -> Any:
         """
         统一的查询入口。根据当前引擎类型自动路由到 MySQL 或 SQLite 实现。
         占位符由子类实现决定（MySQL 用 %s，SQLite 用 ?）。
         内置一次重试，应对瞬时连接断开等短暂故障。
+        return_lastrowid=True 时返回自增主键（用于 INSERT 后取 ID）。
         """
         for attempt in (1, 2):
             try:
                 if self.db_mode == "sqlite":
-                    return await self._execute_sqlite(query, args, fetch)
-                return await self._execute_mysql(query, args, fetch)
+                    return await self._execute_sqlite(query, args, fetch, return_lastrowid)
+                return await self._execute_mysql(query, args, fetch, return_lastrowid)
             except Exception as e:
                 logger.warning(f"[NewAPI Utils] 数据库查询失败 (第{attempt}次): {e}")
                 if attempt == 2:
@@ -327,13 +389,16 @@ class NewApiCore:
                 await asyncio.sleep(0.5)
 
     async def _execute_mysql(self, query: str, args: Optional[Tuple] = None,
-                             fetch: Optional[str] = None) -> Any:
+                             fetch: Optional[str] = None,
+                             return_lastrowid: bool = False) -> Any:
         """执行 MySQL 查询。"""
         if self.db_pool is None:
             raise RuntimeError("MySQL 连接池未建立")
         async with self.db_pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor if fetch else aiomysql.Cursor) as cur:
                 await cur.execute(query, args)
+                if return_lastrowid:
+                    return cur.lastrowid
                 if fetch == 'one':
                     return await cur.fetchone()
                 elif fetch == 'all':
@@ -341,7 +406,8 @@ class NewApiCore:
                 return cur.rowcount
 
     async def _execute_sqlite(self, query: str, args: Optional[Tuple] = None,
-                              fetch: Optional[str] = None) -> Any:
+                              fetch: Optional[str] = None,
+                              return_lastrowid: bool = False) -> Any:
         """执行 SQLite 查询，自动处理占位符转换和行格式转换。"""
         if self.db_conn is None:
             raise RuntimeError("SQLite 连接未建立")
@@ -358,6 +424,10 @@ class NewApiCore:
             elif fetch == 'all':
                 rows = await cur.fetchall()
                 return [self._sqlite_row_to_dict(r) for r in rows] if rows else []
+            if return_lastrowid:
+                lid = cur.lastrowid
+                await self.db_conn.commit()
+                return lid
             await self.db_conn.commit()
             return cur.rowcount
 
@@ -539,6 +609,153 @@ class NewApiCore:
 
         logger.info(f"[NewAPI Utils] 数据库导入完成 ← {path}，各表行数: {counts}")
         return {"path": path, "counts": counts}
+
+    # ------------------------------------------------------------------ #
+    #  红包（拼手气，凭空发放，24h 过期）                                #
+    # ------------------------------------------------------------------ #
+
+    def _get_red_packet_lock(self, packet_id: int) -> asyncio.Lock:
+        """获取红包领取锁（懒创建；按红包 ID 串行化抢红包动作）。"""
+        if packet_id not in self._red_packet_locks:
+            self._red_packet_locks[packet_id] = asyncio.Lock()
+        return self._red_packet_locks[packet_id]
+
+    @staticmethod
+    def _split_red_packet(total_raw: int, n: int) -> list:
+        """微信式拼手气拆分：随机递减期望，总和恰好等于 total_raw，每份至少 1。"""
+        shares = []
+        remain = total_raw
+        people = n
+        for _ in range(n - 1):
+            avg = remain // people
+            high = max(1, 2 * avg)
+            cap = remain - (people - 1)          # 给后面每人至少留 1
+            amt = random.randint(1, max(1, min(high, cap)))
+            shares.append(amt)
+            remain -= amt
+            people -= 1
+        shares.append(max(1, remain))
+        # 修正极端情况下总和偏差（理论上不会发生，保险起见）
+        diff = total_raw - sum(shares)
+        if diff:
+            shares[-1] += diff
+        return shares
+
+    @staticmethod
+    def _parse_dt(val) -> Optional[datetime]:
+        """把 MySQL datetime / SQLite 时间字符串统一解析为 datetime。"""
+        if isinstance(val, datetime):
+            return val
+        if isinstance(val, str):
+            try:
+                return datetime.strptime(val[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    async def create_red_packet(self, creator_identity: str,
+                                total_display: float, grab_count: int) -> Dict[str, Any]:
+        """创建拼手气红包（凭空发放）。返回 {"pid", "total_display", "grab_count", "expire_hours"}。
+
+        金额按原始额度整数预拆分，保证各份之和精确等于总额。
+        """
+        conf = self.config.get('red_packet_settings', {})
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+        expire_hours = int(conf.get('expire_hours', 24))
+        total_raw = int(round(total_display * ratio))
+        # 防护：每份至少 1 原始额度，否则拆分会产生非正数份额
+        if total_raw < grab_count:
+            return {"error": "TOO_SMALL", "grab_count": grab_count}
+        shares = self._split_red_packet(total_raw, grab_count)
+        now = datetime.utcnow()
+        expire = now + timedelta(hours=expire_hours)
+        now_s = self._format_datetime_for_sqlite(now)
+        exp_s = self._format_datetime_for_sqlite(expire)
+
+        pid = await self.execute_query(
+            "INSERT INTO newapi_red_packets (creator_identity, total_raw, total_display, display_ratio, "
+            "grab_count, remain_count, shares_json, status, created_at, expire_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'ACTIVE', %s, %s)",
+            (creator_identity, total_raw, float(total_display), ratio, grab_count, grab_count,
+             json.dumps(shares), now_s, exp_s),
+            return_lastrowid=True,
+        )
+        pid = int(pid) if pid else 0
+        logger.info(f"[NewAPI Utils] 红包 #{pid} 已创建：{total_display} 额度 / {grab_count} 份 / {expire_hours}h 有效")
+        return {"pid": pid, "total_display": total_display, "grab_count": grab_count,
+                "expire_hours": expire_hours}
+
+    async def grab_red_packet(self, packet_id: int, identity: str,
+                              website_user_id: int) -> Tuple[str, Dict[str, Any]]:
+        """抢红包。锁内完成：有效期校验 → 重复领取校验 → 取份额 → 入账 → 记录 → 扣减剩余份数。
+
+        status: SUCCESS / ALREADY / EMPTY / EXPIRED / NOT_FOUND / DISABLED / API_ERROR
+        """
+        conf = self.config.get('red_packet_settings', {})
+        if not conf.get('enabled', True):
+            return "DISABLED", {}
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+
+        lock = self._get_red_packet_lock(packet_id)
+        async with lock:
+            p = await self.execute_query(
+                "SELECT * FROM newapi_red_packets WHERE id = %s", (packet_id,), fetch='one'
+            )
+            if not p:
+                return "NOT_FOUND", {}
+            if p['status'] == 'EXPIRED':
+                return "EXPIRED", {}
+            if p['status'] != 'ACTIVE' or int(p['remain_count']) <= 0:
+                return "EMPTY", {}
+
+            expire_at = self._parse_dt(p.get('expire_at'))
+            if expire_at and datetime.utcnow() >= expire_at:
+                await self.execute_query(
+                    "UPDATE newapi_red_packets SET status = 'EXPIRED' WHERE id = %s", (packet_id,)
+                )
+                return "EXPIRED", {}
+
+            dup = await self.execute_query(
+                "SELECT id FROM newapi_red_packet_records WHERE packet_id = %s AND identity = %s",
+                (packet_id, identity), fetch='one'
+            )
+            if dup:
+                return "ALREADY", {}
+
+            idx = int(p['grab_count']) - int(p['remain_count'])
+            try:
+                shares = json.loads(p['shares_json'])
+                amount_raw = int(shares[idx])
+            except (ValueError, KeyError, IndexError, TypeError):
+                return "EMPTY", {}
+
+            # 先入账，入账失败不消耗份额（可重试）
+            if not await self.manage_user_quota(website_user_id, "add", amount_raw):
+                return "API_ERROR", {}
+
+            try:
+                await self.execute_query(
+                    "INSERT INTO newapi_red_packet_records (packet_id, identity, website_user_id, amount_raw) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (packet_id, identity, website_user_id, amount_raw)
+                )
+            except Exception as e:
+                # 唯一键冲突=已抢过（并发兜底）；其他异常同样不重复入账
+                logger.warning(f"[NewAPI Utils] 红包记录写入受限（可能重复领取）: {e}")
+                return "ALREADY", {}
+
+            new_remain = int(p['remain_count']) - 1
+            new_status = 'EXHAUSTED' if new_remain <= 0 else 'ACTIVE'
+            await self.execute_query(
+                "UPDATE newapi_red_packets SET remain_count = %s, status = %s WHERE id = %s",
+                (new_remain, new_status, packet_id)
+            )
+
+            return "SUCCESS", {
+                "amount_display": amount_raw / ratio,
+                "remain": new_remain,
+                "total": int(p['grab_count']),
+            }
 
     # ------------------------------------------------------------------ #
     #  API 请求                                                       #

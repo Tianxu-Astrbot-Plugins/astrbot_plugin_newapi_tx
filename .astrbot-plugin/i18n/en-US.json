@@ -103,6 +103,13 @@
     "debug_settings": {
       "description": "Debug mode (keep off for daily use)",
       "enabled": { "description": "When enabled, verbose diagnostic logs are emitted (e.g. per-line cache values / final values of the consumption board, full rendered text) to locate display issues" }
+    },
+    "red_packet_settings": {
+      "description": "Red packets (lucky-grab, minted by admins)",
+      "enabled": { "description": "Whether the red packet feature is enabled" },
+      "expire_hours": { "description": "Packet validity in hours; grabbing is refused after expiry" },
+      "max_grab_count": { "description": "Max number of shares per packet" },
+      "max_total_display": { "description": "Max total display quota per packet" }
     }
   }
 }

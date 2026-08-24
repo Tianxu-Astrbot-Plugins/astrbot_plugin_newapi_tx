@@ -436,6 +436,115 @@ class NewApiSuitePlugin(Star):
             for table, key in labels.items()
         )
 
+    # --- 红包（拼手气） ---
+
+    @filter.command("发红包")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @require_group_whitelist
+    async def handle_send_red_packet(self, event: AstrMessageEvent, count: str = "", amount: str = ""):
+        """(管理员) 发拼手气红包：发红包 数量 总额度（凭空发放，24h 有效）。"""
+        conf = self.config.get('red_packet_settings', {})
+        if not conf.get('enabled', True):
+            yield event.plain_result(self.t("rp.disabled"))
+            return
+
+        raw_count = str(count or "").strip()
+        raw_amount = str(amount or "").strip()
+
+        if not raw_count:
+            yield event.plain_result(self.t("rp.count_required"))
+            return
+        if not raw_count.isdigit():
+            yield event.plain_result(self.t("rp.count_invalid", input=raw_count))
+            return
+        grab_count = int(raw_count)
+        max_count = int(conf.get('max_grab_count', 100))
+        if grab_count <= 0 or grab_count > max_count:
+            yield event.plain_result(self.t("rp.count_too_large", max=max_count))
+            return
+
+        if not raw_amount:
+            yield event.plain_result(self.t("rp.amount_required"))
+            return
+        try:
+            total_display = round(float(raw_amount), 6)
+        except ValueError:
+            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            return
+        if total_display <= 0:
+            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            return
+        max_total = float(conf.get('max_total_display', 100000))
+        if total_display > max_total:
+            yield event.plain_result(self.t("rp.amount_too_large", max=f"{max_total:g}"))
+            return
+
+        # 每份至少 1 原始额度，总额过低无法拆分
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+        if int(round(total_display * ratio)) < grab_count:
+            yield event.plain_result(self.t("rp.too_small", count=grab_count))
+            return
+
+        creator = str(event.get_sender_id())
+        result = await self.core.create_red_packet(creator, total_display, grab_count)
+        if not result or result.get('error') or not result.get('pid'):
+            yield event.plain_result(self.t("rp.api_error"))
+            return
+        amount_str = f"{total_display:.6f}".rstrip('0').rstrip('.')
+        yield event.plain_result(self.t(
+            "rp.created", pid=result['pid'], count=grab_count,
+            amount=amount_str, hours=result['expire_hours'], creator=creator,
+        ))
+
+    @filter.command("抢红包")
+    @require_group_whitelist
+    async def handle_grab_red_packet(self, event: AstrMessageEvent, packet_id: str = ""):
+        """抢拼手气红包：抢红包 红包编号。额度直接入账网站余额。"""
+        raw_pid = str(packet_id or "").strip()
+        if not raw_pid:
+            yield event.plain_result(self.t("rp.pid_required"))
+            return
+        if not raw_pid.isdigit():
+            yield event.plain_result(self.t("rp.pid_invalid", input=raw_pid))
+            return
+        pid = int(raw_pid)
+
+        identity = str(event.get_sender_id())
+        binding = await self.core.get_user_by_identity(identity)
+        if not binding:
+            yield event.plain_result(self.t("not_bound"))
+            return
+        site_id = binding['website_user_id']
+
+        status, details = await self.core.grab_red_packet(pid, identity, site_id)
+
+        reply = ""
+        match status:
+            case "SUCCESS":
+                amount_str = f"{details['amount_display']:.6f}"
+                reply = self.t("rp.success", amount=amount_str,
+                               remain=details['remain'], total=details['total'])
+                # 抢到后顺便更新余额缓存，供排行榜使用
+                data = await self.core.get_api_user_data(site_id)
+                if data:
+                    self._balance_cache[site_id] = (
+                        binding.get('qq_id', binding.get('openid')), data.get('quota', 0)
+                    )
+            case "ALREADY":
+                reply = self.t("rp.already")
+            case "EMPTY":
+                reply = self.t("rp.empty")
+            case "EXPIRED":
+                reply = self.t("rp.expired")
+            case "NOT_FOUND":
+                reply = self.t("rp.not_found", pid=pid)
+            case "DISABLED":
+                reply = self.t("rp.disabled")
+            case _:
+                reply = self.t("rp.api_error")
+
+        yield event.plain_result(reply)
+
     @filter.command("调整余额")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_adjust_balance(
