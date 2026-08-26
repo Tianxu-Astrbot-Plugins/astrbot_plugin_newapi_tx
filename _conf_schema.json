@@ -43,6 +43,7 @@
          "type": "object",
          "items": {
             "enabled": { "description": "是否启用签到功能", "type": "bool", "default": true },
+            "wild_bot_priority": { "description": "野机优先：同一网站账号同时绑有 QQ 与 OpenID 时，若签到同时经官机(OpenID)与野机(QQ号)触发，官机侧自动让行约1.5秒，由野机先完成签到", "type": "bool", "default": true },
             "timezone_offset_hours": { "description": "时区偏移量 (例如 UTC+8 填 8)", "type": "int", "default": 8 },
             "min_display_quota": { "description": "每日签到可获得的最小显示额度", "type": "float", "default": 1500 },
             "max_display_quota": { "description": "每日签到可获得的最大显示额度", "type": "float", "default": 1500 },
@@ -177,6 +178,7 @@
         "type": "object",
         "items": {
             "enabled": { "description": "是否启用红包功能", "type": "bool", "default": true },
+            "official_only": { "description": "红包仅限官机：开启后发红包、抢红包等所有红包指令仅可通过官方机器人（OpenID 身份）触发，野机收到的请求一律静默忽略（不回复、零消息量，降低风控风险）；发红包公告会自动提示仅限官机", "type": "bool", "default": false },
             "expire_hours": { "description": "红包有效期（小时），超时后不能再抢", "type": "int", "default": 24 },
             "max_grab_count": { "description": "单个红包最大份数上限", "type": "int", "default": 100 },
             "max_total_display": { "description": "单个红包总额度上限（显示额度）", "type": "float", "default": 100000 }

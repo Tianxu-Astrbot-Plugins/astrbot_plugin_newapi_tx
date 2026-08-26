@@ -34,6 +34,10 @@ def load_plugin_version() -> str:
 
 PLUGIN_VERSION = load_plugin_version()
 
+# 「野机优先」让行窗口（秒）：签到同时经官机(OpenID)与野机(QQ号)触发时，
+# 官机侧延迟该时长再抢签到锁，让野机请求稳定先手；仅官机单独触发时仅多等这一小段。
+_WILD_PRIORITY_YIELD_SECONDS = 1.5
+
 def require_binding(f):
     """
     检查命令发起者是否绑定网站ID，若未绑定则中断并提示，若已绑定则附加binding对象以便后续使用。
@@ -113,6 +117,19 @@ class NewApiSuitePlugin(Star):
     def _is_debug(self) -> bool:
         """是否开启调试模式（debug_settings.enabled），动态读取便于随时切换。"""
         return bool(self.config.get('debug_settings.enabled', False))
+
+    def _red_packet_official_only(self) -> bool:
+        """红包是否仅限官机（red_packet_settings.official_only），动态读取便于随时切换。"""
+        return bool(self.config.get('red_packet_settings.official_only', False))
+
+    def _is_wild_bot_sender(self, event: AstrMessageEvent) -> bool:
+        """发送方是否野机身份（数字 QQ 号）。官机（OpenID）为非数字字符串。"""
+        sender = event.get_sender_id()
+        return isinstance(sender, int) or str(sender).strip().lstrip('-').isdigit()
+
+    def _red_packet_official_only_blocked(self, event: AstrMessageEvent) -> bool:
+        """「红包仅官机」开启且本次请求来自野机（数字 QQ 身份）时返回 True，调用方应拒绝处理。"""
+        return self._red_packet_official_only() and self._is_wild_bot_sender(event)
 
     def _command_group_allowed(self, event: AstrMessageEvent) -> bool:
         """判断当前消息是否命中群白名单：白名单未启用时一律放行。
@@ -293,10 +310,24 @@ class NewApiSuitePlugin(Star):
     @require_group_whitelist
     @require_binding
     async def handle_check_in(self, event: AstrMessageEvent):
-        """处理用户每日签到请求。"""
+        """处理用户每日签到请求（QQ 绑定与 OpenID 绑定均可签到，支持「野机优先」）。"""
         user_qq_id = event.get_sender_id()
-        
-        status, details = await self.core.perform_check_in(user_qq_id, binding=event.binding)
+        binding = event.binding
+
+        # 「野机优先」：本次请求经官机（OpenID 绑定）到达、且该网站账号同时绑有 QQ 号时，
+        # 先让行一小段时间，使同一用户在野机侧的并发签到稳定获胜；仅官机单独触发时只是多等固定延迟。
+        if (
+            self.config.get('check_in_settings.wild_bot_priority', True)
+            and binding.get('openid')
+            and await self.core.get_user_by_website_id(binding['website_user_id'])
+        ):
+            logger.info(
+                "[NewAPI] 野机优先：OpenID 签到让行 %.1fs（网站ID %s）",
+                _WILD_PRIORITY_YIELD_SECONDS, binding['website_user_id'],
+            )
+            await asyncio.sleep(_WILD_PRIORITY_YIELD_SECONDS)
+
+        status, details = await self.core.perform_check_in(user_qq_id, binding=binding)
         
         check_in_conf = self.config.get('check_in_settings', {})
         
@@ -388,6 +419,12 @@ class NewApiSuitePlugin(Star):
             case "NOT_FOUND":
                 reply = self.t("lookup.not_found", id=target_id)
         
+        # 双绑定展示：该网站账号若同时存在 OpenID 绑定（官机），一并列出
+        if id_type in ("WEBSITE_ID", "QQ_ID"):
+            extra_openid = await self.core.get_openid_by_website_id(binding['website_user_id'])
+            if extra_openid:
+                reply += self.t("lookup.openid_extra", openid=extra_openid['openid'])
+                
         yield event.plain_result(reply)
 
     @filter.command("new-tx")
@@ -442,7 +479,11 @@ class NewApiSuitePlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @require_group_whitelist
     async def handle_send_red_packet(self, event: AstrMessageEvent, count: str = "", amount: str = ""):
-        """(管理员) 发拼手气红包：发红包 数量 总额度（凭空发放，24h 有效）。"""
+        """(管理员) 发拼手气红包：发红包 数量 总额度（凭空发放，24h 有效）。可配置仅限官机触发。"""
+        # 「红包仅官机」：野机的发红包请求同样静默忽略——不回复、零消息量，降低野机风控风险
+        if self._red_packet_official_only_blocked(event):
+            return
+
         conf = self.config.get('red_packet_settings', {})
         if not conf.get('enabled', True):
             yield event.plain_result(self.t("rp.disabled"))
@@ -491,15 +532,23 @@ class NewApiSuitePlugin(Star):
             yield event.plain_result(self.t("rp.api_error"))
             return
         amount_str = f"{total_display:.6f}".rstrip('0').rstrip('.')
-        yield event.plain_result(self.t(
+        created_msg = self.t(
             "rp.created", pid=result['pid'], count=grab_count,
             amount=amount_str, hours=result['expire_hours'], creator=creator,
-        ))
+        )
+        # 仅官机模式下，公告附提示，引导用户去官方机器人处抢
+        if self._red_packet_official_only():
+            created_msg += self.t("rp.official_only_hint")
+        yield event.plain_result(created_msg)
 
     @filter.command("抢红包")
     @require_group_whitelist
     async def handle_grab_red_packet(self, event: AstrMessageEvent, packet_id: str = ""):
-        """抢拼手气红包：抢红包 红包编号。额度直接入账网站余额。"""
+        """抢拼手气红包：抢红包 红包编号。额度直接入账网站余额。可配置仅限官机（OpenID 身份）。"""
+        # 「红包仅官机」：野机（数字 QQ 身份）的请求静默忽略——不回复、零消息量，降低野机风控风险
+        if self._red_packet_official_only_blocked(event):
+            return
+
         raw_pid = str(packet_id or "").strip()
         if not raw_pid:
             yield event.plain_result(self.t("rp.pid_required"))
@@ -705,7 +754,7 @@ class NewApiSuitePlugin(Star):
 
     @filter.command("消耗榜")
     async def handle_consumption_leaderboard(self, event: AstrMessageEvent):
-        """(管理员) 展示全站用户近 N 小时 token 消耗排行榜（用户名 + 已绑定则附 QQ 号）。"""
+        """展示全站用户近 N 小时 token 消耗排行榜（用户名 + 已绑定则附 QQ 号），所有用户可用。"""
         conf = self.config.get('consumption_leaderboard_settings', {})
         if not conf.get('enabled', False):
             yield event.plain_result(self.t("consumption.disabled"))
