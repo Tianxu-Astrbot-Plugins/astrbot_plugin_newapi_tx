@@ -41,6 +41,8 @@ _TRANSLATIONS = {
         "bind.id_taken": "审核失败：ID {site_id} 已被另一位用户绑定，无法操作。",
         "bind.success": "恭喜您！绑定成功！\n您的QQ现已与网站ID {site_id} 绑定。\n已自动为您晋升至【{group}】分组。",
         "bind.openid_success": "恭喜您！绑定成功！\n您的OpenID {openid} 现已与网站ID {site_id} 绑定。\n已自动为您晋升至【{group}】分组。",
+        "bind.openid_success_no_group": "恭喜您！绑定成功！\n您的OpenID {openid} 现已与网站ID {site_id} 绑定。\nℹ️ 已开启「仅野机绑定改分组」：官机绑定不改变用户组。",
+        "bind.openid_need_qq": "❌ 绑定失败：当前已开启「官机绑定需先绑QQ」，网站ID {site_id} 还没有 QQ 号（野机）绑定。\n请先在野机机器人处完成「绑定 {site_id}」后再来。",
         "bind.failed": "绑定过程中发生未知错误，操作已自动撤销，请联系管理员。",
         # 签到
         "check_in.disabled": "抱歉，每日签到功能当前未开启。",
@@ -152,6 +154,8 @@ _TRANSLATIONS = {
         "bind.id_taken": "Check failed: ID {site_id} is already bound to another user.",
         "bind.success": "Congratulations! Binding successful!\nYour QQ is now bound to website ID {site_id}.\nYou've been promoted to group 【{group}】.",
         "bind.openid_success": "Congratulations! Binding successful!\nYour OpenID {openid} is now bound to website ID {site_id}.\nYou've been promoted to group 【{group}】.",
+        "bind.openid_success_no_group": "Congratulations! Binding successful!\nYour OpenID {openid} is now bound to website ID {site_id}.\nℹ️ \"Wild-bind-only group change\" is enabled: official (OpenID) binding does not change the user group.",
+        "bind.openid_need_qq": "❌ Binding failed: \"official binding requires an existing QQ binding\" is enabled, and website ID {site_id} has no QQ (wild bot) binding yet.\nPlease run 绑定 {site_id} via the wild bot first.",
         "bind.failed": "An unknown error occurred during binding; the operation was rolled back. Please contact the admin.",
         "check_in.disabled": "Sorry, daily check-in is currently disabled.",
         "check_in.already": "You've already checked in today, come back tomorrow!",

@@ -4,6 +4,12 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.39] - 2026-08-22
+
+### 新增
+- 「仅野机绑定改分组」开关：`binding_settings.wild_bind_group_only`（默认关）。开启后用户组晋升仅由野机(QQ号)绑定触发，OpenID(官机) 绑定不再改动网站用户组，绑定成功提示注明「官机绑定不改变用户组」。
+- 「官机绑定需先绑QQ」开关：`binding_settings.openid_require_qq_bound`（默认关）。开启后网站 ID 必须已绑有 QQ 号（野机）才能在官机完成 OpenID 绑定，未绑时给出「请先在野机机器人处完成绑定」的引导提示且不落库。
+
 ## [1.0.38] - 2026-08-22
 
 ### 新增

@@ -35,7 +35,9 @@
             "quota_display_ratio": { "description": "额度显示汇率 (原始Quota / 此值)", "type": "int", "default": 500000 },
             "forbidden_website_ids": { "description": "禁止绑定的网站ID黑名单（仅拦截新增绑定，已绑定不受影响）", "type": "list", "default": [] },
             "forbidden_user_ids": { "description": "禁止绑定的用户QQ黑名单（仅拦截新增绑定，已绑定不受影响）", "type": "list", "default": [] },
-            "enable_openid_binding": { "description": "是否支持官机 OpenID 格式绑定：开启后绑定时使用 openid 而非 QQ 号，OpenID 绑定关系单独存储于 newapi_openid_bindings 表，且打劫支持以 openid 为目标", "type": "bool", "default": false }
+            "enable_openid_binding": { "description": "是否支持官机 OpenID 格式绑定：开启后绑定时使用 openid 而非 QQ 号，OpenID 绑定关系单独存储于 newapi_openid_bindings 表，且打劫支持以 openid 为目标", "type": "bool", "default": false },
+            "wild_bind_group_only": { "description": "仅野机(QQ号)绑定修改用户组：开启后 OpenID(官机) 绑定不再改动网站用户组，绑定成功提示会注明「官机绑定不改分组」", "type": "bool", "default": false },
+            "openid_require_qq_bound": { "description": "官机(OpenID)绑定要求该网站 ID 已绑有 QQ 号：开启后未在野机绑定过 QQ 的网站 ID 无法在官机完成绑定", "type": "bool", "default": false }
         }
     },
     "check_in_settings": {

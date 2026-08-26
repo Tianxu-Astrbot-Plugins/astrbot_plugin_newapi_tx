@@ -30,7 +30,9 @@
       "quota_display_ratio": { "description": "Quota display exchange rate (raw quota / this value)" },
       "forbidden_website_ids": { "description": "Blacklisted website IDs (only blocks new bindings, existing bindings unaffected)" },
       "forbidden_user_ids": { "description": "Blacklisted QQ numbers (only blocks new bindings, existing bindings unaffected)" },
-      "enable_openid_binding": { "description": "Enable official-bot OpenID binding: when enabled, binding uses OpenID instead of QQ number; OpenID bindings are stored in a separate table (newapi_openid_bindings); heist can target by OpenID" }
+      "enable_openid_binding": { "description": "Enable official-bot OpenID binding: when enabled, binding uses OpenID instead of QQ number; OpenID bindings are stored in a separate table (newapi_openid_bindings); heist can target by OpenID" },
+      "wild_bind_group_only": { "description": "Wild-bind-only group change: when enabled, OpenID (official bot) bindings no longer modify the website user group; the success message notes that official binding does not change the group" },
+      "openid_require_qq_bound": { "description": "Official (OpenID) binding requires an existing QQ binding: when enabled, a website ID without a QQ (wild bot) binding cannot be bound via the official bot" }
     },
     "check_in_settings": {
       "description": "Daily check-in feature",

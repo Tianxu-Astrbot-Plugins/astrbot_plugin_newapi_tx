@@ -1079,7 +1079,12 @@ class NewApiSuitePlugin(Star):
             return False, self.t("bind.failed")
 
     async def _perform_openid_binding(self, event, openid: str, website_user_id: int) -> str:
-        """执行 OpenID 绑定（优先前检查冲突，写入 newapi_openid_bindings 表，晋升用户组）。"""
+        """执行 OpenID 绑定。
+
+        可配置开关：
+          - openid_require_qq_bound：该网站 ID 须已绑有 QQ 号（野机），否则拒绝官机绑定；
+          - wild_bind_group_only：用户组晋升仅由野机(QQ)绑定触发，官机(OpenID)绑定不改分组。
+        """
         # 检查 OpenID 是否已被绑定
         existing = await self.core.get_user_by_openid(openid)
         if existing:
@@ -1101,25 +1106,36 @@ class NewApiSuitePlugin(Star):
         if website_user_id in forbidden_ids:
             return self.t("bind.website_blacklisted", site_id=website_user_id)
 
+        # 开关「官机绑定需先绑QQ」：该网站 ID 尚无野机(QQ)绑定时拒绝官机绑定
+        if binding_conf.get('openid_require_qq_bound', False) \
+           and not await self.core.get_user_by_website_id(website_user_id):
+            return self.t("bind.openid_need_qq", site_id=website_user_id)
+
+        # 开关「仅野机绑定改分组」：开启时官机(OpenID)绑定不做用户组晋升
+        promote_group = not binding_conf.get('wild_bind_group_only', False)
+        target_group = binding_conf.get('binding_group', 'default')
+
         try:
             await self.core.insert_openid_binding(openid, website_user_id)
-            # 晋升用户组
-            target_group = binding_conf.get('binding_group', 'default')
-            api_user_data = await self.core.get_api_user_data(website_user_id)
-            if api_user_data and api_user_data.get('group') != target_group:
-                update_payload = {
-                    "id": website_user_id,
-                    "username": api_user_data.get("username"),
-                    "display_name": api_user_data.get("display_name"),
-                    "role": api_user_data.get("role"),
-                    "status": api_user_data.get("status"),
-                    "group": target_group
-                }
-                update_success = await self.core.update_api_user(update_payload)
-                if not update_success:
-                    raise Exception("API group update failed.")
+            if promote_group:
+                api_user_data = await self.core.get_api_user_data(website_user_id)
+                if api_user_data and api_user_data.get('group') != target_group:
+                    update_payload = {
+                        "id": website_user_id,
+                        "username": api_user_data.get("username"),
+                        "display_name": api_user_data.get("display_name"),
+                        "role": api_user_data.get("role"),
+                        "status": api_user_data.get("status"),
+                        "group": target_group
+                    }
+                    update_success = await self.core.update_api_user(update_payload)
+                    if not update_success:
+                        raise Exception("API group update failed.")
 
-            return self.t("bind.openid_success", openid=openid, site_id=website_user_id, group=target_group)
+            if promote_group:
+                return self.t("bind.openid_success", openid=openid, site_id=website_user_id, group=target_group)
+            # 官机绑定不改分组：成功提示中明确说明
+            return self.t("bind.openid_success_no_group", openid=openid, site_id=website_user_id)
         except Exception as e:
             logger.error(f"OpenID 绑定失败: {e}", exc_info=True)
             await self.core.delete_openid_binding(openid=openid)
