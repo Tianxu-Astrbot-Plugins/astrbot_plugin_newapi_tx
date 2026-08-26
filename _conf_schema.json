@@ -180,6 +180,9 @@
         "type": "object",
         "items": {
             "enabled": { "description": "是否启用红包功能", "type": "bool", "default": true },
+            "user_send_enabled": { "description": "普通用户个人红包：用户可用「个人红包 [份数] [总额度]」从自己余额扣款发红包；每满 user_send_balance_per_send 余额可发 1 次/日，每日上限 user_send_max_per_day 次", "type": "bool", "default": true },
+            "user_send_balance_per_send": { "description": "个人红包次数门槛：每满此显示额度可发 1 次/日（如 5 = 余额5可发1次、10可发2次）", "type": "float", "default": 5 },
+            "user_send_max_per_day": { "description": "个人红包每日发送次数上限（与余额门槛取较小值）", "type": "int", "default": 10 },
             "official_only": { "description": "红包仅限官机：开启后发红包、抢红包等所有红包指令仅可通过官方机器人（OpenID 身份）触发，野机收到的请求一律静默忽略（不回复、零消息量，降低风控风险）；发红包公告会自动提示仅限官机", "type": "bool", "default": false },
             "expire_hours": { "description": "红包有效期（小时），超时后不能再抢", "type": "int", "default": 24 },
             "max_grab_count": { "description": "单个红包最大份数上限", "type": "int", "default": 100 },

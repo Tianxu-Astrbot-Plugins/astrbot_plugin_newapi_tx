@@ -37,6 +37,8 @@ class NewApiCore:
         self._check_in_locks: dict[int, asyncio.Lock] = {}
         # 红包并发锁：按红包 ID 串行化领取动作，防止并发超抢/重复领取
         self._red_packet_locks: dict[int, asyncio.Lock] = {}
+        # 个人红包按网站账号加锁：串行化「查余额→扣款→建包」，防并发双花
+        self._user_rp_locks: dict[str, asyncio.Lock] = {}
         logger.info("[NewAPI Utils] 核心工具类已实例化，等待异步初始化...")
 
     @staticmethod
@@ -868,6 +870,43 @@ class NewApiCore:
             return response.get("data")
         return None
 
+    async def _http_request_json(self, method: str, url: str, headers: Dict[str, str],
+                                 json_data: Optional[Dict] = None) -> Optional[Dict]:
+        """发送 HTTP 请求并解析 JSON；非 2xx 或异常返回 None（供自定义鉴权头请求复用）。"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.request(
+                    method, url, headers=headers, json=json_data, timeout=10.0
+                )
+            if not response.is_success:
+                logger.info(f"[NewAPI Utils] HTTP {response.status_code} {url}: {response.text[:200]}")
+                return None
+            return response.json()
+        except Exception as e:
+            logger.warning(f"[NewAPI Utils] HTTP 请求失败 {method} {url}: {e}")
+            return None
+
+    async def get_self_by_user_token(self, token: str) -> Optional[Dict]:
+        """用网站用户的系统访问令牌调用 GET /api/user/self 验证身份。
+
+        令牌有效时返回 {"user_id": int, "username": str}；无效/网络失败返回 None。
+        """
+        if not self.api_base_url or not token or not str(token).strip():
+            return None
+        token = str(token).strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+        url = f"{self.api_base_url.rstrip('/')}/api/user/self"
+        data = await self._http_request_json("GET", url, {"Authorization": f"Bearer {token}"})
+        if data and data.get("success"):
+            user = data.get("data") or {}
+            uid = user.get("id")
+            try:
+                return {"user_id": int(uid), "username": user.get("username")}
+            except (TypeError, ValueError):
+                return None
+        return None
+
     async def get_user_token_consumption(self, hours: int = 24) -> Optional[list]:
         """聚合近 N 小时全站消耗日志（type=2），按网站用户 ID 汇总 token 消耗。
 
@@ -950,6 +989,13 @@ class NewApiCore:
         if website_user_id not in self._check_in_locks:
             self._check_in_locks[website_user_id] = asyncio.Lock()
         return self._check_in_locks[website_user_id]
+
+    def _get_user_rp_lock(self, website_user_id) -> asyncio.Lock:
+        """获取指定网站账号的个人红包发送锁（懒创建；键统一为 str）。"""
+        key = str(website_user_id)
+        if key not in self._user_rp_locks:
+            self._user_rp_locks[key] = asyncio.Lock()
+        return self._user_rp_locks[key]
 
     async def get_check_in_state(self, website_user_id: int) -> Optional[Dict]:
         """获取指定网站账号的持久化签到状态（按网站用户去重，防止多 QQ 轮流绑同一账号刷礼包与重复签到）。"""

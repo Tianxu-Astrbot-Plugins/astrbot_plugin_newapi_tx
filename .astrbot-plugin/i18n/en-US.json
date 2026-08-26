@@ -110,6 +110,9 @@
     "red_packet_settings": {
       "description": "Red packets (lucky-grab, minted by admins)",
       "enabled": { "description": "Whether the red packet feature is enabled" },
+      "user_send_enabled": { "description": "User personal red packets: users can send with 个人红包 [shares] [total], deducted from their own balance; 1 send per user_send_balance_per_send of balance per day, capped at user_send_max_per_day/day" },
+      "user_send_balance_per_send": { "description": "Personal packet threshold: each full unit of display balance grants 1 send per day (e.g. 5 = balance 5 grants 1, balance 10 grants 2)" },
+      "user_send_max_per_day": { "description": "Daily cap on personal packet sends (the smaller of this and the balance-derived count applies)" },
       "official_only": { "description": "Official-bot-only red packets: when enabled, all red packet commands (send, grab, etc.) must go through the official bot (OpenID identity); requests arriving at the wild bot (numeric QQ identity) are silently ignored — zero reply volume to reduce risk-control exposure; the packet announcement notes it is official-bot-only" },
       "expire_hours": { "description": "Packet validity in hours; grabbing is refused after expiry" },
       "max_grab_count": { "description": "Max number of shares per packet" },

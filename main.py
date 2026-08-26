@@ -1,7 +1,8 @@
 import os
 import asyncio
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from functools import wraps
+from datetime import datetime, timedelta
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
@@ -80,6 +81,22 @@ def require_group_whitelist(f):
         async for item in f(self, event, *args, **kwargs):
             yield item
             
+    return wrapper
+
+def guard_errors(f):
+    """全局异常护栏：捕获命令处理中的未预期异常，记录完整堆栈，
+    并向用户回复人类可读提示（附带 issue 反馈链接），避免框架直接抛出难懂的错误转储。"""
+    @wraps(f)
+    async def wrapper(self, event: AstrMessageEvent, *args, **kwargs):
+        try:
+            async for item in f(self, event, *args, **kwargs):
+                yield item
+        except Exception as e:
+            logger.error(f"[NewAPI] 处理命令 {getattr(f, '__name__', '?')} 时发生未预期异常: {e}", exc_info=True)
+            try:
+                yield event.plain_result(self.t("common.unexpected_error", err=str(e)))
+            except Exception:
+                pass
     return wrapper
 
 @register(
@@ -189,6 +206,7 @@ class NewApiSuitePlugin(Star):
 
 
     @filter.command("pingapi")
+    @guard_errors
     async def handle_ping_command(self, event: AstrMessageEvent):
         """响应ping命令，并报告数据库与 New API 连接状态。"""
         db_status = self.t("ping.connected") if self.core.is_db_ready() else self.t("ping.disconnected")
@@ -204,6 +222,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("查询余额")
+    @guard_errors
     @require_group_whitelist
     @require_binding
     async def handle_query_balance(self, event: AstrMessageEvent):
@@ -222,12 +241,16 @@ class NewApiSuitePlugin(Star):
 
         reply = self.t("query_balance.success", site_id=website_user_id, quota=f"{display_quota:.6f}")
 
-        # 顺便更新余额缓存，供排行榜使用
-        self._balance_cache[website_user_id] = (binding['qq_id'], api_user_data.get("quota", 0))
+        # 顺便更新余额缓存，供排行榜使用（OpenID 绑定无 qq_id，回退存 openid 身份）
+        self._balance_cache[website_user_id] = (
+            binding.get('qq_id', binding.get('openid')),
+            api_user_data.get("quota", 0),
+        )
         
         yield event.plain_result(reply)
 
     @filter.command("查余额")
+    @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_query_other_balance(self, event: AstrMessageEvent, identifier: str = ""):
         """(管理员) 智能识别 @ 提及、网站ID或QQ号，查询其网站余额。"""
@@ -254,6 +277,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("绑定")
+    @guard_errors
     async def handle_bind_command(self, event: AstrMessageEvent, website_user_id: str = ""):
         """处理用户绑定请求，并执行校验。支持 QQ 号绑定 与（开启开关后）OpenID 绑定。"""
         # 网站ID 人工校验：缺失/非数字时给出人类可读提示，避免框架类型转换直接抛异常
@@ -307,6 +331,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(message)
 
     @filter.command("签到")
+    @guard_errors
     @require_group_whitelist
     @require_binding
     async def handle_check_in(self, event: AstrMessageEvent):
@@ -366,6 +391,7 @@ class NewApiSuitePlugin(Star):
         
         yield event.plain_result(reply)
     @filter.command("解绑")
+    @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_unbind_command(self, event: AstrMessageEvent, website_user_id: str = ""):
         """(管理员) 强制解除指定网站ID的绑定。"""
@@ -396,6 +422,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("查询")
+    @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_universal_lookup(self, event: AstrMessageEvent, identifier: str = ""):
         """(管理员) 智能查询，自动识别网站ID或QQ号。"""
@@ -428,6 +455,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("new-tx")
+    @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_db_transfer(self, event: AstrMessageEvent, action: str = ""):
         """(管理员) 数据库导入导出：导出=当前库内容写入迁移文件；导入=迁移文件覆盖当前库。"""
@@ -476,6 +504,7 @@ class NewApiSuitePlugin(Star):
     # --- 红包（拼手气） ---
 
     @filter.command("发红包")
+    @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)
     @require_group_whitelist
     async def handle_send_red_packet(self, event: AstrMessageEvent, count: str = "", amount: str = ""):
@@ -542,6 +571,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(created_msg)
 
     @filter.command("抢红包")
+    @guard_errors
     @require_group_whitelist
     async def handle_grab_red_packet(self, event: AstrMessageEvent, packet_id: str = ""):
         """抢拼手气红包：抢红包 红包编号。额度直接入账网站余额。可配置仅限官机（OpenID 身份）。"""
@@ -594,7 +624,202 @@ class NewApiSuitePlugin(Star):
 
         yield event.plain_result(reply)
 
+    # --- 个人红包（普通用户，扣自己额度）辅助方法 ---
+
+    def _user_rp_date_key(self) -> str:
+        """个人红包每日计数的日期键（与签到一致使用配置时区）。"""
+        offset = float(self.config.get('check_in_settings.timezone_offset_hours', 0) or 0)
+        return (datetime.utcnow() + timedelta(hours=offset)).date().isoformat()
+
+    async def _load_user_rp_daily(self) -> Dict[str, Any]:
+        """加载当日个人红包计数桶；跨天自动重置。"""
+        key = self._user_rp_date_key()
+        store = await self.get_kv_data("rp_user_daily", {}) or {}
+        if store.get("date") != key:
+            store = {"date": key, "counts": {}}
+        store.setdefault("counts", {})
+        return store
+
+    async def _user_rp_used_today(self, site_id) -> int:
+        """该网站账号今日已发个人红包次数。"""
+        store = await self._load_user_rp_daily()
+        return int(store["counts"].get(str(site_id), 0))
+
+    async def _bump_user_rp_count(self, site_id):
+        """发送成功后计数 +1（锁内重读防覆盖）。"""
+        async with self._kv_lock:
+            store = await self._load_user_rp_daily()
+            counts = store["counts"]
+            counts[str(site_id)] = int(counts.get(str(site_id), 0)) + 1
+            await self.put_kv_data("rp_user_daily", store)
+
+    async def _rp_verified_sites(self) -> set:
+        """已完成访问令牌验证的网站 ID 集合（KV：site_id → ISO 时间）。"""
+        data = await self.get_kv_data("rp_user_verified", {}) or {}
+        return set(data.keys())
+
+    async def _mark_rp_verified(self, site_id):
+        """标记网站账号已通过访问令牌验证（一次验证永久生效）。"""
+        async with self._kv_lock:
+            data = await self.get_kv_data("rp_user_verified", {}) or {}
+            data[str(site_id)] = datetime.utcnow().isoformat()
+            await self.put_kv_data("rp_user_verified", data)
+
+    @filter.command("验证令牌")
+    @guard_errors
+    @require_binding
+    async def handle_verify_token(self, event: AstrMessageEvent, token: str = ""):
+        """个人红包身份验证：验证令牌 [网站访问令牌]，一次通过后永久生效。"""
+        raw = str(token or "").strip().strip('"').strip("'")
+        binding = event.binding
+        site_id = int(binding['website_user_id'])
+
+        if not raw:
+            yield event.plain_result(self.t("rp.verify.token_required"))
+            return
+
+        verified = await self.core.get_self_by_user_token(raw)
+        if not verified or verified.get("user_id") != site_id:
+            logger.warning(f"[个人红包] 令牌验证失败：site={site_id}")
+            yield event.plain_result(self.t("rp.verify.failed"))
+            return
+
+        await self._mark_rp_verified(site_id)
+        logger.info(f"[个人红包] 网站ID {site_id} 访问令牌验证通过")
+        yield event.plain_result(self.t("rp.verify.success", site_id=site_id))
+
+    @filter.command("个人红包")
+    @guard_errors
+    @require_group_whitelist
+    @require_binding
+    async def handle_user_red_packet(self, event: AstrMessageEvent, count: str = "", amount: str = ""):
+        """普通用户发拼手气红包：个人红包 [份数] [总额度]。
+
+        规则：从自己余额扣款；每满 user_send_balance_per_send 余额可发 1 次/日，
+        每日上限 user_send_max_per_day 次；首次发前需「验证令牌」完成身份验证。
+        """
+        conf = self.config.get('red_packet_settings', {})
+        if not conf.get('enabled', True):
+            yield event.plain_result(self.t("rp.disabled"))
+            return
+        if not conf.get('user_send_enabled', True):
+            yield event.plain_result(self.t("rp.user.disabled"))
+            return
+
+        # 参数校验（人类可读提示）
+        raw_count = str(count or "").strip()
+        raw_amount = str(amount or "").strip()
+        if not raw_count:
+            yield event.plain_result(self.t("rp.count_required"))
+            return
+        if not raw_count.isdigit():
+            yield event.plain_result(self.t("rp.count_invalid", input=raw_count))
+            return
+        grab_count = int(raw_count)
+        max_count = int(conf.get('max_grab_count', 100))
+        if grab_count <= 0 or grab_count > max_count:
+            yield event.plain_result(self.t("rp.count_too_large", max=max_count))
+            return
+        if not raw_amount:
+            yield event.plain_result(self.t("rp.amount_required"))
+            return
+        try:
+            total_display = round(float(raw_amount), 6)
+        except ValueError:
+            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            return
+        if total_display <= 0:
+            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            return
+
+        identity = str(event.get_sender_id())
+        binding = event.binding
+        site_id = int(binding['website_user_id'])
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+
+        # 首次发红包前的身份验证门槛
+        if str(site_id) not in await self._rp_verified_sites():
+            yield event.plain_result(self.t("rp.user.not_verified"))
+            return
+
+        # 拉取实时余额 → 计算今日可发次数
+        api_user = await self.core.get_api_user_data(site_id)
+        if not api_user:
+            yield event.plain_result(self.t("rp.user.balance_unavailable"))
+            return
+        balance_raw = int(api_user.get("quota", 0) or 0)
+        balance_display = balance_raw / ratio
+        per_send = float(conf.get('user_send_balance_per_send', 5) or 5)
+        max_day = int(conf.get('user_send_max_per_day', 10))
+        allowed_today = min(max_day, int(balance_display // per_send))
+        used_today = await self._user_rp_used_today(site_id)
+        remaining = max(0, allowed_today - used_today)
+        if allowed_today <= 0 or remaining <= 0:
+            yield event.plain_result(self.t(
+                "rp.user.limit_reached",
+                balance=f"{balance_display:.6f}".rstrip('0').rstrip('.'),
+                per=f"{per_send:g}", max=max_day, used=used_today,
+            ))
+            return
+
+        total_raw = int(round(total_display * ratio))
+        if total_display > balance_display:
+            yield event.plain_result(self.t(
+                "rp.user.exceeds_balance",
+                balance=f"{balance_display:.6f}".rstrip('0').rstrip('.'),
+            ))
+            return
+        # 每份至少 1 原始额度，总额过低无法拆分
+        if total_raw < grab_count:
+            yield event.plain_result(self.t("rp.too_small", count=grab_count))
+            return
+
+        # 锁内「查余额→扣款→建包→计数」，防并发双花；建包失败自动退款
+        async with self.core._get_user_rp_lock(site_id):
+            fresh = await self.core.get_api_user_data(site_id)
+            fresh_balance_raw = int(fresh.get("quota", 0) or 0) if fresh else 0
+            if total_raw > fresh_balance_raw:
+                yield event.plain_result(self.t(
+                    "rp.user.exceeds_balance",
+                    balance=f"{fresh_balance_raw / ratio:.6f}".rstrip('0').rstrip('.'),
+                ))
+                return
+            if not await self.core.manage_user_quota(site_id, "subtract", total_raw):
+                yield event.plain_result(self.t("rp.user.deduct_failed"))
+                return
+
+            result = await self.core.create_red_packet(identity, total_display, grab_count)
+            if not result or result.get('error') or not result.get('pid'):
+                refunded = await self.core.manage_user_quota(site_id, "add", total_raw)
+                if not refunded:
+                    logger.error(f"[个人红包] 建包失败且退款失败！site={site_id} 金额={total_display} 请人工处理")
+                yield event.plain_result(self.t(
+                    "rp.user.create_failed",
+                    amount=f"{total_display:.6f}".rstrip('0').rstrip('.'),
+                ))
+                return
+
+            await self._bump_user_rp_count(site_id)
+
+        new_balance_display = (fresh_balance_raw - total_raw) / ratio
+        amount_str = f"{total_display:.6f}".rstrip('0').rstrip('.')
+        created_msg = self.t(
+            "rp.user.created", creator=f"网站ID {site_id}", pid=result['pid'], count=grab_count,
+            amount=amount_str, hours=result['expire_hours'],
+            balance=f"{new_balance_display:.6f}".rstrip('0').rstrip('.'),
+            left=max(0, remaining - 1),
+        )
+        # 「红包仅官机」开启时，公告同样提示只能经官方机器人抢
+        if self._red_packet_official_only():
+            created_msg += self.t("rp.official_only_hint")
+        # 更新余额缓存供排行榜使用
+        self._balance_cache[site_id] = (
+            binding.get('qq_id', binding.get('openid')), fresh_balance_raw - total_raw
+        )
+        yield event.plain_result(created_msg)
+
     @filter.command("调整余额")
+    @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_adjust_balance(
         self, event: AstrMessageEvent, identifier: str = "", display_adjustment: float = 0.0
@@ -637,6 +862,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("打劫")
+    @guard_errors
     @require_group_whitelist
     async def handle_heist_command(self, event: AstrMessageEvent, identifier: str = ""):
         """(娱乐) 打劫目标：@ 提及，或输入 QQ 号 / OpenID（开启 openid 绑定后支持）。"""
@@ -735,6 +961,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("榜单")
+    @guard_errors
     async def handle_leaderboard(self, event: AstrMessageEvent):
         """展示群内余额榜与打劫榜（余额从用户操作缓存读取，无需查API）。"""
         lb_conf = self.config.get('leaderboard_settings', {})
@@ -753,6 +980,7 @@ class NewApiSuitePlugin(Star):
         yield event.plain_result(reply)
 
     @filter.command("消耗榜")
+    @guard_errors
     async def handle_consumption_leaderboard(self, event: AstrMessageEvent):
         """展示全站用户近 N 小时 token 消耗排行榜（用户名 + 已绑定则附 QQ 号），所有用户可用。"""
         conf = self.config.get('consumption_leaderboard_settings', {})

@@ -11,6 +11,7 @@ _TRANSLATIONS = {
         "common.at_or_id_required": "请 @ 对方，或输入网站ID/QQ号。",
         "common.amount_required": "请提供要调整的额度。",
         "common.unknown": "未知",
+        "common.unexpected_error": "❌ 处理命令时发生未预期错误：{err}",
         # 未绑定
         "not_bound": "您尚未绑定网站ID，无法进行此操作。\n请发送「绑定 [您的网站ID]」指令完成绑定。",
         # pingapi
@@ -124,11 +125,25 @@ _TRANSLATIONS = {
         "rp.already": "🙃 你已经抢过这个红包啦，别贪心～",
         "rp.api_error": "- 红包入账失败（本次未消耗份额），请稍后再试或联系管理员。",
         "rp.success": "🎉 恭喜！抢到 {amount} 额度！\n💰 已直接存入你的余额\n📦 本红包剩余 {remain}/{total} 份",
+        # 个人红包（普通用户，扣自己余额）
+        "rp.user.disabled": "🧧 个人红包功能当前未开启。",
+        "rp.user.not_verified": "🔒 首次发个人红包需要先验证身份。\n请发送：验证令牌 你的网站访问令牌\n（在 New API 网站「个人设置 → 生成系统访问令牌」获取）\n⚠️ 令牌等同密码：建议私聊机器人验证；若已在群内发送，验证后请尽快到网站重置令牌。",
+        "rp.user.balance_unavailable": "❌ 暂时无法获取你的账户余额，请稍后再试。",
+        "rp.user.limit_reached": "🧧 今日个人红包次数已用完～\n💰 当前余额 {balance}（每满 {per} 可发 1 次，每日上限 {max} 次）\n📅 今日已发 {used} 次，明天再来吧！",
+        "rp.user.exceeds_balance": "❌ 红包总额度不能超过你的余额（当前 {balance}）。",
+        "rp.user.deduct_failed": "❌ 扣款失败，红包未发出。请稍后再试或联系管理员。",
+        "rp.user.create_failed": "❌ 红包创建失败，已为你退还 {amount} 额度。请稍后再试；若额度未到账请联系管理员。",
+        "rp.user.created": "🧧 {creator} 用自己的额度发出了拼手气红包！\n💰 总额度 {amount} · 共 {count} 份（已从余额扣除）\n📦 发送者余额剩余 {balance}\n👉 快发送「抢红包 {pid}」来抢！\n⏰ {hours} 小时内有效 · 发送者今日还可发 {left} 次",
+        # 个人红包身份验证
+        "rp.verify.token_required": "用法：验证令牌 [你的网站访问令牌]\n在 New API 网站「个人设置 → 生成系统访问令牌」获取。\n⚠️ 令牌等同密码：建议私聊机器人验证；若已在群内发送，验证后请尽快到网站重置令牌。",
+        "rp.verify.success": "✅ 身份验证成功！令牌有效且与网站ID {site_id} 对应。\n之后即可直接使用「个人红包 [份数] [总额度]」，无需重复验证。",
+        "rp.verify.failed": "❌ 验证失败：访问令牌无效，或与你绑定的网站ID不匹配。\n请确认令牌来自你绑定的账号后重新发送。",
     },
     "en": {
         "common.at_or_id_required": "Please @ a user or enter a website ID / QQ number.",
         "common.amount_required": "Please provide the quota amount.",
         "common.unknown": "Unknown",
+        "common.unexpected_error": "❌ An unexpected error occurred while processing the command: {err}",
         "not_bound": "You haven't bound a website ID yet.\nPlease send the command \"绑定 [your website ID]\" to bind first.",
         "ping.connected": "✅ Connected",
         "ping.disconnected": "❌ Failed",
@@ -229,19 +244,63 @@ _TRANSLATIONS = {
         "rp.already": "🙃 You've already grabbed this packet, don't be greedy~",
         "rp.api_error": "- Failed to credit the red packet (share not consumed). Please retry later or contact the admin.",
         "rp.success": "🎉 Congrats! You grabbed {amount} quota!\n💰 Credited directly to your balance\n📦 {remain}/{total} shares left in this packet",
+        # User red packets (deducted from sender balance)
+        "rp.user.disabled": "🧧 The personal red packet feature is currently disabled.",
+        "rp.user.not_verified": "🔒 Identity verification is required before sending your first personal red packet.\nPlease send: 验证令牌 your-website-access-token\n(Get it on the New API site under Profile → Generate system access token)\n⚠️ Treat the token like a password: verify in a private chat if possible; reset it on the site if it was exposed in a group.",
+        "rp.user.balance_unavailable": "❌ Unable to fetch your account balance right now. Please try again later.",
+        "rp.user.limit_reached": "🧧 You've used up today's personal red packet sends~\n💰 Current balance {balance} (1 send per {per} of balance, up to {max}/day)\n📅 Sent today: {used}. Come back tomorrow!",
+        "rp.user.exceeds_balance": "❌ The packet total cannot exceed your balance (currently {balance}).",
+        "rp.user.deduct_failed": "❌ Deduction failed; the packet was not created. Please retry later or contact the admin.",
+        "rp.user.create_failed": "❌ Packet creation failed; {amount} has been refunded. Please retry later; contact the admin if the refund is missing.",
+        "rp.user.created": "🧧 {creator} sent a lucky red packet from their own balance!\n💰 Total {amount} · {count} shares (deducted from balance)\n📦 Sender's remaining balance: {balance}\n👉 Send \"抢红包 {pid}\" to grab!\n⏰ Valid for {hours} hours · sender can send {left} more today",
+        # Personal packet identity verification
+        "rp.verify.token_required": "Usage: 验证令牌 [your website access token]\nGet it on the New API site under Profile → Generate system access token.\n⚠️ Treat the token like a password: verify in private chat if possible; reset it if exposed in a group.",
+        "rp.verify.success": "✅ Verification succeeded! The token is valid and matches website ID {site_id}.\nYou can now use \"个人红包 [shares] [total]\" directly — no need to verify again.",
+        "rp.verify.failed": "❌ Verification failed: the access token is invalid or does not match your bound website ID.\nMake sure the token belongs to your bound account and try again.",
     },
 }
 
 
+# 插件反馈 issue 入口（报错文案统一附带）
+_ISSUE_URL = "https://github.com/Tianxu-Astrbot-Plugins/astrbot_plugin_newapi_tx/issues"
+_ISSUE_FOOTER_ZH = f"\n\n🛠 遇到问题？请到 {_ISSUE_URL} 反馈（建议附上后台日志，我们会尽快处理）"
+_ISSUE_FOOTER_EN = f"\n\n🛠 Having trouble? Report at {_ISSUE_URL} (backend logs appreciated)"
+
+# 视为「插件内部失败」的文案 key：translate() 会自动附上反馈链接。
+# 用户输入校验类提示（如 ID 格式错误、未绑定、黑名单）不算报错，不在此列。
+_ERROR_KEYS = frozenset({
+    "common.unexpected_error",
+    "bind.failed",
+    "unbind.failed",
+    "check_in.api_user_not_found",
+    "check_in.api_update_failed",
+    "check_in.unknown",
+    "query_balance.failed",
+    "query_other.failed",
+    "adjust.fetch_failed",
+    "adjust.update_failed",
+    "heist.api_error",
+    "heist.unknown",
+    "rp.api_error",
+    "db_transfer.failed",
+})
+
+
 def translate(lang: str, key: str, **kwargs):
-    """按语言返回翻译后的文案；缺 key 或语言时回退到中文，再回退到 key 本身。"""
+    """按语言返回翻译后的文案；缺 key 或语言时回退到中文，再回退到 key 本身。
+
+    命中 ERROR_KEYS（插件内部失败类文案）时自动追加 issue 反馈链接，方便用户上报。
+    """
     lang_key = "en" if str(lang).lower().startswith("en") else "zh"
     msg = _TRANSLATIONS.get(lang_key, _TRANSLATIONS["zh"]).get(key)
     if msg is None:
         msg = _TRANSLATIONS["zh"].get(key, key)
     if kwargs:
         try:
-            return msg.format(**kwargs)
+            msg = msg.format(**kwargs)
         except (KeyError, IndexError, ValueError):
-            return msg
+            pass
+    if key in _ERROR_KEYS:
+        msg += _ISSUE_FOOTER_ZH if lang_key == "zh" else _ISSUE_FOOTER_EN
+    return msg
     return msg
