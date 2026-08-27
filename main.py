@@ -118,6 +118,8 @@ class NewApiSuitePlugin(Star):
         self.lang = self._resolve_language()
         # 余额缓存：用户每次操作时顺手更新，排行榜直接读缓存无需查 API
         self._balance_cache: dict[int, tuple[int, int]] = {}
+        # 「红包仅官机」门控判定环形记录（最近20条），供「红包诊断」指令查看
+        self._rp_gate_log: list = []
         # KV 绑定缓存读-改-写锁，避免并发操作互相覆盖丢失更新
         self._kv_lock = asyncio.Lock()
         logger.info("[NewAPI Suite] 插件已实例化，准备进行异步初始化...")
@@ -181,13 +183,30 @@ class NewApiSuitePlugin(Star):
         """统一回复出口：所有用户可见回复经此发出，便于按来源套用格式。"""
         return event.plain_result(self._maybe_markdown(event, text))
 
-    def _red_packet_official_only_blocked(self, event: AstrMessageEvent) -> bool:
+    def _red_packet_official_only_blocked(self, event: AstrMessageEvent, cmd: str = "") -> bool:
         """「红包仅官机」开启且本次请求来自野机（数字 QQ 身份）时返回 True，调用方应拒绝处理。
 
         判定规则：触发者身份为数字(QQ) → 野机 → 拦截；非数字(OpenID) → 官机 → 放行。
+        同时把每次判定写入内存环形记录，供「红包诊断」指令直接在对话内查看。
         """
         on = self._red_packet_official_only()
         wild = self._is_wild_bot_sender(event)
+        # 记录最近判定（含开关关闭时的放行），便于「红包诊断」排查部署问题
+        try:
+            self._rp_gate_log.append({
+                "time": (datetime.utcnow() + timedelta(
+                    hours=float(self.config.get('check_in_settings.timezone_offset_hours', 0) or 0)
+                )).strftime("%m-%d %H:%M:%S"),
+                "cmd": cmd,
+                "sender": event.get_sender_id(),
+                "wild": wild,
+                "on": on,
+                "blocked": bool(on and wild),
+            })
+            if len(self._rp_gate_log) > 20:
+                del self._rp_gate_log[:-20]
+        except Exception as e:
+            logger.warning(f"[红包诊断] 判定记录失败: {e}")
         if on and self._is_debug():
             logger.info(
                 f"[红包仅官机][DEBUG] 开关={on} 触发者={event.get_sender_id()!r} "
@@ -196,6 +215,42 @@ class NewApiSuitePlugin(Star):
         if on and wild:
             logger.info(f"[红包仅官机] 已静默忽略野机请求 sender={event.get_sender_id()!r}")
         return on and wild
+
+    @filter.command("红包诊断")
+    @guard_errors
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def handle_rp_diag(self, event: AstrMessageEvent):
+        """(管理员) 在对话内查看「红包仅官机」门控状态与最近红包指令的判定记录。"""
+        conf = self.config.get('red_packet_settings', {}) or {}
+        reply_conf = self.config.get('reply_settings', {}) or {}
+        sender = event.get_sender_id()
+        wild = self._is_wild_bot_sender(event)
+
+        toggle = self.t("rp.diag.toggle_on") if conf.get('official_only', False) else self.t("rp.diag.toggle_off")
+        md_state = self.t("rp.diag.toggle_on") if reply_conf.get('official_markdown', True) else self.t("rp.diag.toggle_off")
+        identity = (
+            self.t("rp.diag.identity_wild", sender=str(sender))
+            if wild else self.t("rp.diag.identity_official", sender=str(sender))
+        )
+
+        records = list(getattr(self, "_rp_gate_log", []))[-10:]
+        if records:
+            lines = [self.t(
+                "rp.diag.record",
+                time=r["time"], cmd=r["cmd"] or "-",
+                sender=str(r["sender"]),
+                kind=self.t("rp.diag.kind_wild") if r["wild"] else self.t("rp.diag.kind_official"),
+                verdict=(self.t("rp.diag.verdict_block") if r["blocked"] else self.t("rp.diag.verdict_pass")),
+            ) for r in records]
+            records_text = "\n".join(lines)
+        else:
+            records_text = self.t("rp.diag.no_records")
+
+        yield self._reply(event, self.t(
+            "rp.diag.header",
+            version=PLUGIN_VERSION, toggle=toggle, md=md_state,
+            identity=identity, records=records_text,
+        ))
 
     def _command_group_allowed(self, event: AstrMessageEvent) -> bool:
         """判断当前消息是否命中群白名单：白名单未启用时一律放行。
@@ -559,7 +614,7 @@ class NewApiSuitePlugin(Star):
     async def handle_send_red_packet(self, event: AstrMessageEvent, count: str = "", amount: str = ""):
         """(管理员) 发拼手气红包：发红包 数量 总额度（凭空发放，24h 有效）。可配置仅限官机触发。"""
         # 「红包仅官机」：野机的发红包请求同样静默忽略——不回复、零消息量，降低野机风控风险
-        if self._red_packet_official_only_blocked(event):
+        if self._red_packet_official_only_blocked(event, "发红包"):
             return
 
         conf = self.config.get('red_packet_settings', {})
@@ -625,7 +680,7 @@ class NewApiSuitePlugin(Star):
     async def handle_grab_red_packet(self, event: AstrMessageEvent, packet_id: str = ""):
         """抢拼手气红包：抢红包 红包编号。额度直接入账网站余额。可配置仅限官机（OpenID 身份）。"""
         # 「红包仅官机」：野机（数字 QQ 身份）的请求静默忽略——不回复、零消息量，降低野机风控风险
-        if self._red_packet_official_only_blocked(event):
+        if self._red_packet_official_only_blocked(event, "抢红包"):
             return
 
         raw_pid = str(packet_id or "").strip()
@@ -748,7 +803,7 @@ class NewApiSuitePlugin(Star):
         每日上限 user_send_max_per_day 次；首次发前需「验证令牌」完成身份验证。
         """
         # 「红包仅官机」：野机的个人红包请求同样静默忽略——不回复、零消息量
-        if self._red_packet_official_only_blocked(event):
+        if self._red_packet_official_only_blocked(event, "个人红包"):
             return
 
         conf = self.config.get('red_packet_settings', {})
