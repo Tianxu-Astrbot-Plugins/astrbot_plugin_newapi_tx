@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.49] - 2026-08-27
+
+### 修复
+- MySQL 老库个人红包创建失败（`Unknown column 'rp_code'`）：原补列逻辑依赖 `information_schema` 探测，在部分部署下误判「列已存在」而跳过 ALTER。现改为直接对真实表执行 `SHOW COLUMNS` 探测，缺列立即补列并二次复核；兼容元组/字典两种游标行；补列失败或复核仍缺失时初始化显式报错终止（涉及资金，宁可失败也不静默降级）。
+
 ## [1.0.48] - 2026-08-22
 
 ### 新增

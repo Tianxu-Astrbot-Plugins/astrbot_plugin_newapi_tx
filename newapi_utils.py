@@ -182,18 +182,43 @@ class NewApiCore:
     # ------------------------------------------------------------------ #
 
     async def _ensure_column_mysql(self, table: str, column: str, ddl: str):
-        """MySQL 缺列补列（老库平滑迁移 rp_code / grabber_name 等新字段）。"""
+        """MySQL 缺列补列（老库平滑迁移 rp_code / grabber_name 等新字段）。
+
+        直接对真实表执行 SHOW COLUMNS 探测，避免 information_schema 在部分
+        部署下的作用域/权限差异导致「列实际缺失却被判为已存在」。
+        补列后二次复核；仍失败则抛错让初始化显式失败（涉及资金安全）。
+        """
+        def _rows_have_col(rs):
+            # aiomysql 默认游标返回元组行，DictCursor 返回字典；两种都兼容
+            for r in rs or []:
+                vals = r.values() if isinstance(r, dict) else r
+                if column in {str(v).lower() for v in vals}:
+                    return True
+            return False
+
+        show_sql = f"SHOW COLUMNS FROM `{table}`"
         try:
-            rows = await self.execute_query(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
-                (table, column), fetch='all'
-            )
-            if not rows:
-                await self.execute_query(f"ALTER TABLE `{table}` ADD COLUMN {ddl}")
-                logger.info(f"[NewAPI Utils] MySQL 已为 {table} 补充新列: {column}")
+            async with self.db_pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(show_sql)
+                    rs = await cur.fetchall()
+                    if not _rows_have_col(rs):
+                        logger.warning(f"[NewAPI Utils] MySQL 缺少列 {table}.{column}，执行补列: ADD {ddl}")
+                        await cur.execute(f"ALTER TABLE `{table}` ADD COLUMN {ddl}")
+                        await conn.commit()
+                    else:
+                        return
+                    # 二次复核
+                    await cur.execute(show_sql)
+                    rs2 = await cur.fetchall()
+                    if not _rows_have_col(rs2):
+                        raise RuntimeError(
+                            f"MySQL 补列后仍未找到 {table}.{column}，请人工检查数据库账号权限"
+                        )
+                    logger.info(f"[NewAPI Utils] MySQL 已为 {table} 补充新列: {column}")
         except Exception as e:
-            logger.warning(f"[NewAPI Utils] MySQL 检查/补充列 {table}.{column} 失败: {e}")
+            logger.error(f"[NewAPI Utils] MySQL 补列失败 {table}.{column}: {e}", exc_info=True)
+            raise
 
     async def _ensure_tables_exist_mysql(self):
         """MySQL 模式：创建必要的数据表。"""
