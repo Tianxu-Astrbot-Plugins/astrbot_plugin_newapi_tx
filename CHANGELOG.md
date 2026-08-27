@@ -4,6 +4,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.50] - 2026-08-27
+
+### 修复
+- 补列 SQL 缺少列名（`ADD COLUMN varchar(24)...` → `ADD COLUMN \`rp_code\` varchar(24)...`）：1.0.49 的 ALTER 在 MySQL 上触发 1064 语法错误导致初始化失败。MySQL 与 SQLite 两处助手均已修正；单元测试升级为断言生成的语句包含反引号列名，并新增「真实 SQLite 老表」迁移用例。
+
 ## [1.0.49] - 2026-08-27
 
 ### 修复

@@ -203,8 +203,8 @@ class NewApiCore:
                     await cur.execute(show_sql)
                     rs = await cur.fetchall()
                     if not _rows_have_col(rs):
-                        logger.warning(f"[NewAPI Utils] MySQL 缺少列 {table}.{column}，执行补列: ADD {ddl}")
-                        await cur.execute(f"ALTER TABLE `{table}` ADD COLUMN {ddl}")
+                        logger.warning(f"[NewAPI Utils] MySQL 缺少列 {table}.{column}，执行补列")
+                        await cur.execute(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {ddl}")
                         await conn.commit()
                     else:
                         return
@@ -331,7 +331,7 @@ class NewApiCore:
             cur = await self.db_conn.execute(f"PRAGMA table_info({table})")
             cols = await cur.fetchall()
             if not any((c[1] if not isinstance(c, dict) else c.get("name")) == column for c in cols):
-                await self.execute_query(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+                await self.execute_query(f"ALTER TABLE {table} ADD COLUMN `{column}` {ddl}")
                 logger.info(f"[NewAPI Utils] SQLite 已为 {table} 补充新列: {column}")
         except Exception as e:
             logger.warning(f"[NewAPI Utils] SQLite 检查/补充列 {table}.{column} 失败: {e}")
