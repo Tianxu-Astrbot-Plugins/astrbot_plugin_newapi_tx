@@ -121,6 +121,17 @@ class NewApiSuitePlugin(Star):
         # KV 绑定缓存读-改-写锁，避免并发操作互相覆盖丢失更新
         self._kv_lock = asyncio.Lock()
         logger.info("[NewAPI Suite] 插件已实例化，准备进行异步初始化...")
+        # 启动即打印红包门控关键状态，便于确认运行中的代码与配置
+        try:
+            _rp_conf = self.config.get('red_packet_settings', {}) or {}
+            logger.info(
+                "[NewAPI Suite] 红包仅官机 official_only=%s | 官机Markdown=%s | 版本=%s",
+                _rp_conf.get('official_only', False),
+                (self.config.get('reply_settings', {}) or {}).get('official_markdown', True),
+                PLUGIN_VERSION,
+            )
+        except Exception as e:
+            logger.warning(f"[NewAPI Suite] 启动状态打印失败: {e}")
 
     def _resolve_language(self) -> str:
         """解析回复语言，缺省中文。"""
