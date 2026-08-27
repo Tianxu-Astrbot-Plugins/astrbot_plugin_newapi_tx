@@ -127,6 +127,11 @@ _TRANSLATIONS = {
         "rp.success": "🎉 恭喜！抢到 {amount} 额度！\n💰 已直接存入你的余额\n📦 本红包剩余 {remain}/{total} 份",
         # 个人红包（普通用户，扣自己余额）
         "rp.user.disabled": "🧧 个人红包功能当前未开启。",
+        "rp.user.count_required": "请提供红包份数。\n用法：个人红包 [份数] [总额度]，例如：个人红包 10 50",
+        "rp.user.count_invalid": "❌ 红包份数应为正整数，你输入的「{input}」无法识别。\n例如：个人红包 10 50",
+        "rp.user.count_too_large": "❌ 单个红包最多 {max} 份。",
+        "rp.user.amount_required": "请提供红包总额度。\n用法：个人红包 [份数] [总额度]，例如：个人红包 10 50",
+        "rp.user.amount_invalid": "❌ 总额度应为正数，你输入的「{input}」无法识别。\n例如：个人红包 10 50",
         "rp.user.not_verified": "🔒 首次发个人红包需要先验证身份。\n请发送：验证令牌 你的网站访问令牌\n（在 New API 网站「个人设置 → 生成系统访问令牌」获取）\n⚠️ 令牌等同密码：建议私聊机器人验证；若已在群内发送，验证后请尽快到网站重置令牌。",
         "rp.user.balance_unavailable": "❌ 暂时无法获取你的账户余额，请稍后再试。",
         "rp.user.limit_reached": "🧧 今日个人红包次数已用完～\n💰 当前余额 {balance}（每满 {per} 可发 1 次，每日上限 {max} 次）\n📅 今日已发 {used} 次，明天再来吧！",
@@ -246,6 +251,11 @@ _TRANSLATIONS = {
         "rp.success": "🎉 Congrats! You grabbed {amount} quota!\n💰 Credited directly to your balance\n📦 {remain}/{total} shares left in this packet",
         # User red packets (deducted from sender balance)
         "rp.user.disabled": "🧧 The personal red packet feature is currently disabled.",
+        "rp.user.count_required": "Please provide the number of shares.\nUsage: 个人红包 [shares] [total], e.g. 个人红包 10 50",
+        "rp.user.count_invalid": "❌ Shares must be a positive integer, but \"{input}\" cannot be recognized.\ne.g. 个人红包 10 50",
+        "rp.user.count_too_large": "❌ A packet can have at most {max} shares.",
+        "rp.user.amount_required": "Please provide the total quota.\nUsage: 个人红包 [shares] [total], e.g. 个人红包 10 50",
+        "rp.user.amount_invalid": "❌ Total quota must be a positive number, but \"{input}\" cannot be recognized.\ne.g. 个人红包 10 50",
         "rp.user.not_verified": "🔒 Identity verification is required before sending your first personal red packet.\nPlease send: 验证令牌 your-website-access-token\n(Get it on the New API site under Profile → Generate system access token)\n⚠️ Treat the token like a password: verify in a private chat if possible; reset it on the site if it was exposed in a group.",
         "rp.user.balance_unavailable": "❌ Unable to fetch your account balance right now. Please try again later.",
         "rp.user.limit_reached": "🧧 You've used up today's personal red packet sends~\n💰 Current balance {balance} (1 send per {per} of balance, up to {max}/day)\n📅 Sent today: {used}. Come back tomorrow!",

@@ -57,7 +57,7 @@ def require_binding(f):
         binding = await self.core.get_user_by_identity(sender_id)
 
         if not binding:
-            yield event.plain_result(self.t("not_bound"))
+            yield self._reply(event, self.t("not_bound"))
             return
         
         # 附加binding对象到event
@@ -94,7 +94,7 @@ def guard_errors(f):
         except Exception as e:
             logger.error(f"[NewAPI] 处理命令 {getattr(f, '__name__', '?')} 时发生未预期异常: {e}", exc_info=True)
             try:
-                yield event.plain_result(self.t("common.unexpected_error", err=str(e)))
+                yield self._reply(event, self.t("common.unexpected_error", err=str(e)))
             except Exception:
                 pass
     return wrapper
@@ -137,16 +137,54 @@ class NewApiSuitePlugin(Star):
 
     def _red_packet_official_only(self) -> bool:
         """红包是否仅限官机（red_packet_settings.official_only），动态读取便于随时切换。"""
-        return bool(self.config.get('red_packet_settings.official_only', False))
+        try:
+            conf = self.config.get('red_packet_settings', {}) or {}
+            return bool(conf.get('official_only', False))
+        except Exception:
+            return False
 
     def _is_wild_bot_sender(self, event: AstrMessageEvent) -> bool:
         """发送方是否野机身份（数字 QQ 号）。官机（OpenID）为非数字字符串。"""
         sender = event.get_sender_id()
         return isinstance(sender, int) or str(sender).strip().lstrip('-').isdigit()
 
+    # --- 回复输出 ---
+
+    def _maybe_markdown(self, event: AstrMessageEvent, text: str) -> str:
+        """「官机 Markdown」：来自官方机器人(OpenID 身份)的请求，把回复转为
+        QQ 原生 Markdown 友好格式（换行符转 \\r）；野机与关闭开关时保持纯文本。
+        官方机器人若无原生 Markdown 权限，AstrBot 框架会自动回退普通文本发送。"""
+        if not isinstance(text, str) or not text:
+            return text
+        if not self.config.get('reply_settings.official_markdown', True):
+            return text
+        try:
+            sender = event.get_sender_id()
+        except Exception:
+            return text
+        if sender is None or isinstance(sender, int) or str(sender).strip().lstrip('-').isdigit():
+            return text
+        return text.replace("\n", "\r")
+
+    def _reply(self, event: AstrMessageEvent, text):
+        """统一回复出口：所有用户可见回复经此发出，便于按来源套用格式。"""
+        return event.plain_result(self._maybe_markdown(event, text))
+
     def _red_packet_official_only_blocked(self, event: AstrMessageEvent) -> bool:
-        """「红包仅官机」开启且本次请求来自野机（数字 QQ 身份）时返回 True，调用方应拒绝处理。"""
-        return self._red_packet_official_only() and self._is_wild_bot_sender(event)
+        """「红包仅官机」开启且本次请求来自野机（数字 QQ 身份）时返回 True，调用方应拒绝处理。
+
+        判定规则：触发者身份为数字(QQ) → 野机 → 拦截；非数字(OpenID) → 官机 → 放行。
+        """
+        on = self._red_packet_official_only()
+        wild = self._is_wild_bot_sender(event)
+        if on and self._is_debug():
+            logger.info(
+                f"[红包仅官机][DEBUG] 开关={on} 触发者={event.get_sender_id()!r} "
+                f"type={type(event.get_sender_id()).__name__} 野机判定={wild} → {'拦截(静默)' if wild else '放行'}"
+            )
+        if on and wild:
+            logger.info(f"[红包仅官机] 已静默忽略野机请求 sender={event.get_sender_id()!r}")
+        return on and wild
 
     def _command_group_allowed(self, event: AstrMessageEvent) -> bool:
         """判断当前消息是否命中群白名单：白名单未启用时一律放行。
@@ -219,7 +257,7 @@ class NewApiSuitePlugin(Star):
             f"{self.t('ping.db_status')}: {db_status}\n"
             f"{self.t('ping.api_status')}: {api_status}"
         )
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("查询余额")
     @guard_errors
@@ -232,7 +270,7 @@ class NewApiSuitePlugin(Star):
         api_user_data = await self.core.get_api_user_data(website_user_id)
 
         if not api_user_data:
-            yield event.plain_result(self.t("query_balance.failed"))
+            yield self._reply(event, self.t("query_balance.failed"))
             return
 
         binding_conf = self.config.get('binding_settings', {})
@@ -247,7 +285,7 @@ class NewApiSuitePlugin(Star):
             api_user_data.get("quota", 0),
         )
         
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("查余额")
     @guard_errors
@@ -256,17 +294,17 @@ class NewApiSuitePlugin(Star):
         """(管理员) 智能识别 @ 提及、网站ID或QQ号，查询其网站余额。"""
         target_id = self._resolve_target(event, identifier)
         if target_id is None:
-            yield event.plain_result(self.t("common.at_or_id_required"))
+            yield self._reply(event, self.t("common.at_or_id_required"))
             return
         id_type, binding = await self.core.lookup_binding(target_id)
         if id_type == "NOT_FOUND":
-            yield event.plain_result(self.t("query_other.not_found", id=target_id))
+            yield self._reply(event, self.t("query_other.not_found", id=target_id))
             return
 
         website_user_id = binding['website_user_id']
         api_user_data = await self.core.get_api_user_data(website_user_id)
         if not api_user_data:
-            yield event.plain_result(self.t("query_other.failed"))
+            yield self._reply(event, self.t("query_other.failed"))
             return
 
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
@@ -274,7 +312,7 @@ class NewApiSuitePlugin(Star):
         label = self.t("query_other.label_website") if id_type == "WEBSITE_ID" else self.t("query_other.label_qq")
 
         reply = self.t("query_other.success", label=label, id=target_id, site_id=website_user_id, quota=f"{display_quota:.6f}")
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("绑定")
     @guard_errors
@@ -283,10 +321,10 @@ class NewApiSuitePlugin(Star):
         # 网站ID 人工校验：缺失/非数字时给出人类可读提示，避免框架类型转换直接抛异常
         raw_id = str(website_user_id or "").strip()
         if not raw_id:
-            yield event.plain_result(self.t("bind.id_required"))
+            yield self._reply(event, self.t("bind.id_required"))
             return
         if not raw_id.isdigit():
-            yield event.plain_result(self.t("bind.id_invalid", input=raw_id))
+            yield self._reply(event, self.t("bind.id_invalid", input=raw_id))
             return
         site_id = int(raw_id)
 
@@ -302,7 +340,7 @@ class NewApiSuitePlugin(Star):
 
         if is_openid_sender:
             openid = sender_id.strip()
-            yield event.plain_result(await self._perform_openid_binding(event, openid, site_id))
+            yield self._reply(event, await self._perform_openid_binding(event, openid, site_id))
             return
 
         user_qq_id = sender_id
@@ -317,10 +355,10 @@ class NewApiSuitePlugin(Star):
         )
         
         if error_message:
-            yield event.plain_result(error_message)
+            yield self._reply(event, error_message)
             return
         
-        yield event.plain_result(self.t("bind.validating"))
+        yield self._reply(event, self.t("bind.validating"))
         
         success, message = await self._perform_binding_ritual(user_qq_id, site_id)
         
@@ -328,7 +366,7 @@ class NewApiSuitePlugin(Star):
             await self._update_binding_cache(site_id, user_qq_id)
             await self._send_success_pm(event, user_qq_id, site_id)
         
-        yield event.plain_result(message)
+        yield self._reply(event, message)
 
     @filter.command("签到")
     @guard_errors
@@ -389,7 +427,7 @@ class NewApiSuitePlugin(Star):
             case _:
                 reply = self.t("check_in.unknown")
         
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
     @filter.command("解绑")
     @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -398,10 +436,10 @@ class NewApiSuitePlugin(Star):
         # 人工校验：非数字时给出人类可读提示，避免框架类型转换直接抛异常
         raw_id = str(website_user_id or "").strip()
         if not raw_id:
-            yield event.plain_result(self.t("bind.id_required"))
+            yield self._reply(event, self.t("bind.id_required"))
             return
         if not raw_id.isdigit():
-            yield event.plain_result(self.t("bind.id_invalid", input=raw_id))
+            yield self._reply(event, self.t("bind.id_invalid", input=raw_id))
             return
         site_id = int(raw_id)
 
@@ -419,7 +457,7 @@ class NewApiSuitePlugin(Star):
             else:
                 reply = self.t("unbind.failed", site_id=site_id)
                 
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("查询")
     @guard_errors
@@ -428,10 +466,10 @@ class NewApiSuitePlugin(Star):
         """(管理员) 智能查询，自动识别网站ID或QQ号。"""
         raw_id = str(identifier or "").strip()
         if not raw_id:
-            yield event.plain_result(self.t("common.at_or_id_required"))
+            yield self._reply(event, self.t("common.at_or_id_required"))
             return
         if not raw_id.isdigit():
-            yield event.plain_result(self.t("bind.id_invalid", input=raw_id))
+            yield self._reply(event, self.t("bind.id_invalid", input=raw_id))
             return
         target_id = int(raw_id)
 
@@ -452,7 +490,7 @@ class NewApiSuitePlugin(Star):
             if extra_openid:
                 reply += self.t("lookup.openid_extra", openid=extra_openid['openid'])
                 
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("new-tx")
     @guard_errors
@@ -461,11 +499,11 @@ class NewApiSuitePlugin(Star):
         """(管理员) 数据库导入导出：导出=当前库内容写入迁移文件；导入=迁移文件覆盖当前库。"""
         act = str(action or "").strip()
         if act not in ("导出", "导入"):
-            yield event.plain_result(self.t("db_transfer.usage"))
+            yield self._reply(event, self.t("db_transfer.usage"))
             return
 
         act_label = self.t("db_transfer.act_export") if act == "导出" else self.t("db_transfer.act_import")
-        yield event.plain_result(self.t("db_transfer.working", action=act_label))
+        yield self._reply(event, self.t("db_transfer.working", action=act_label))
 
         try:
             if act == "导出":
@@ -486,7 +524,7 @@ class NewApiSuitePlugin(Star):
             logger.error(f"数据库{act}操作失败: {e}", exc_info=True)
             reply = self.t("db_transfer.failed", action=act_label, err=e)
 
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     def _format_transfer_counts(self, counts: dict) -> str:
         """把各表行数格式化为多行人类可读明细。"""
@@ -515,50 +553,50 @@ class NewApiSuitePlugin(Star):
 
         conf = self.config.get('red_packet_settings', {})
         if not conf.get('enabled', True):
-            yield event.plain_result(self.t("rp.disabled"))
+            yield self._reply(event, self.t("rp.disabled"))
             return
 
         raw_count = str(count or "").strip()
         raw_amount = str(amount or "").strip()
 
         if not raw_count:
-            yield event.plain_result(self.t("rp.count_required"))
+            yield self._reply(event, self.t("rp.count_required"))
             return
         if not raw_count.isdigit():
-            yield event.plain_result(self.t("rp.count_invalid", input=raw_count))
+            yield self._reply(event, self.t("rp.count_invalid", input=raw_count))
             return
         grab_count = int(raw_count)
         max_count = int(conf.get('max_grab_count', 100))
         if grab_count <= 0 or grab_count > max_count:
-            yield event.plain_result(self.t("rp.count_too_large", max=max_count))
+            yield self._reply(event, self.t("rp.count_too_large", max=max_count))
             return
 
         if not raw_amount:
-            yield event.plain_result(self.t("rp.amount_required"))
+            yield self._reply(event, self.t("rp.amount_required"))
             return
         try:
             total_display = round(float(raw_amount), 6)
         except ValueError:
-            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            yield self._reply(event, self.t("rp.amount_invalid", input=raw_amount))
             return
         if total_display <= 0:
-            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            yield self._reply(event, self.t("rp.amount_invalid", input=raw_amount))
             return
         max_total = float(conf.get('max_total_display', 100000))
         if total_display > max_total:
-            yield event.plain_result(self.t("rp.amount_too_large", max=f"{max_total:g}"))
+            yield self._reply(event, self.t("rp.amount_too_large", max=f"{max_total:g}"))
             return
 
         # 每份至少 1 原始额度，总额过低无法拆分
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
         if int(round(total_display * ratio)) < grab_count:
-            yield event.plain_result(self.t("rp.too_small", count=grab_count))
+            yield self._reply(event, self.t("rp.too_small", count=grab_count))
             return
 
         creator = str(event.get_sender_id())
         result = await self.core.create_red_packet(creator, total_display, grab_count)
         if not result or result.get('error') or not result.get('pid'):
-            yield event.plain_result(self.t("rp.api_error"))
+            yield self._reply(event, self.t("rp.api_error"))
             return
         amount_str = f"{total_display:.6f}".rstrip('0').rstrip('.')
         created_msg = self.t(
@@ -568,7 +606,7 @@ class NewApiSuitePlugin(Star):
         # 仅官机模式下，公告附提示，引导用户去官方机器人处抢
         if self._red_packet_official_only():
             created_msg += self.t("rp.official_only_hint")
-        yield event.plain_result(created_msg)
+        yield self._reply(event, created_msg)
 
     @filter.command("抢红包")
     @guard_errors
@@ -581,17 +619,17 @@ class NewApiSuitePlugin(Star):
 
         raw_pid = str(packet_id or "").strip()
         if not raw_pid:
-            yield event.plain_result(self.t("rp.pid_required"))
+            yield self._reply(event, self.t("rp.pid_required"))
             return
         if not raw_pid.isdigit():
-            yield event.plain_result(self.t("rp.pid_invalid", input=raw_pid))
+            yield self._reply(event, self.t("rp.pid_invalid", input=raw_pid))
             return
         pid = int(raw_pid)
 
         identity = str(event.get_sender_id())
         binding = await self.core.get_user_by_identity(identity)
         if not binding:
-            yield event.plain_result(self.t("not_bound"))
+            yield self._reply(event, self.t("not_bound"))
             return
         site_id = binding['website_user_id']
 
@@ -622,7 +660,7 @@ class NewApiSuitePlugin(Star):
             case _:
                 reply = self.t("rp.api_error")
 
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     # --- 个人红包（普通用户，扣自己额度）辅助方法 ---
 
@@ -675,18 +713,18 @@ class NewApiSuitePlugin(Star):
         site_id = int(binding['website_user_id'])
 
         if not raw:
-            yield event.plain_result(self.t("rp.verify.token_required"))
+            yield self._reply(event, self.t("rp.verify.token_required"))
             return
 
         verified = await self.core.get_self_by_user_token(raw)
         if not verified or verified.get("user_id") != site_id:
             logger.warning(f"[个人红包] 令牌验证失败：site={site_id}")
-            yield event.plain_result(self.t("rp.verify.failed"))
+            yield self._reply(event, self.t("rp.verify.failed"))
             return
 
         await self._mark_rp_verified(site_id)
         logger.info(f"[个人红包] 网站ID {site_id} 访问令牌验证通过")
-        yield event.plain_result(self.t("rp.verify.success", site_id=site_id))
+        yield self._reply(event, self.t("rp.verify.success", site_id=site_id))
 
     @filter.command("个人红包")
     @guard_errors
@@ -698,38 +736,42 @@ class NewApiSuitePlugin(Star):
         规则：从自己余额扣款；每满 user_send_balance_per_send 余额可发 1 次/日，
         每日上限 user_send_max_per_day 次；首次发前需「验证令牌」完成身份验证。
         """
-        conf = self.config.get('red_packet_settings', {})
-        if not conf.get('enabled', True):
-            yield event.plain_result(self.t("rp.disabled"))
-            return
-        if not conf.get('user_send_enabled', True):
-            yield event.plain_result(self.t("rp.user.disabled"))
+        # 「红包仅官机」：野机的个人红包请求同样静默忽略——不回复、零消息量
+        if self._red_packet_official_only_blocked(event):
             return
 
-        # 参数校验（人类可读提示）
+        conf = self.config.get('red_packet_settings', {})
+        if not conf.get('enabled', True):
+            yield self._reply(event, self.t("rp.disabled"))
+            return
+        if not conf.get('user_send_enabled', True):
+            yield self._reply(event, self.t("rp.user.disabled"))
+            return
+
+        # 参数校验（人类可读提示；帮助文案指向「个人红包」而非管理员的「发红包」）
         raw_count = str(count or "").strip()
         raw_amount = str(amount or "").strip()
         if not raw_count:
-            yield event.plain_result(self.t("rp.count_required"))
+            yield self._reply(event, self.t("rp.user.count_required"))
             return
         if not raw_count.isdigit():
-            yield event.plain_result(self.t("rp.count_invalid", input=raw_count))
+            yield self._reply(event, self.t("rp.user.count_invalid", input=raw_count))
             return
         grab_count = int(raw_count)
         max_count = int(conf.get('max_grab_count', 100))
         if grab_count <= 0 or grab_count > max_count:
-            yield event.plain_result(self.t("rp.count_too_large", max=max_count))
+            yield self._reply(event, self.t("rp.user.count_too_large", max=max_count))
             return
         if not raw_amount:
-            yield event.plain_result(self.t("rp.amount_required"))
+            yield self._reply(event, self.t("rp.user.amount_required"))
             return
         try:
             total_display = round(float(raw_amount), 6)
         except ValueError:
-            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            yield self._reply(event, self.t("rp.user.amount_invalid", input=raw_amount))
             return
         if total_display <= 0:
-            yield event.plain_result(self.t("rp.amount_invalid", input=raw_amount))
+            yield self._reply(event, self.t("rp.user.amount_invalid", input=raw_amount))
             return
 
         identity = str(event.get_sender_id())
@@ -739,13 +781,13 @@ class NewApiSuitePlugin(Star):
 
         # 首次发红包前的身份验证门槛
         if str(site_id) not in await self._rp_verified_sites():
-            yield event.plain_result(self.t("rp.user.not_verified"))
+            yield self._reply(event, self.t("rp.user.not_verified"))
             return
 
         # 拉取实时余额 → 计算今日可发次数
         api_user = await self.core.get_api_user_data(site_id)
         if not api_user:
-            yield event.plain_result(self.t("rp.user.balance_unavailable"))
+            yield self._reply(event, self.t("rp.user.balance_unavailable"))
             return
         balance_raw = int(api_user.get("quota", 0) or 0)
         balance_display = balance_raw / ratio
@@ -755,7 +797,7 @@ class NewApiSuitePlugin(Star):
         used_today = await self._user_rp_used_today(site_id)
         remaining = max(0, allowed_today - used_today)
         if allowed_today <= 0 or remaining <= 0:
-            yield event.plain_result(self.t(
+            yield self._reply(event, self.t(
                 "rp.user.limit_reached",
                 balance=f"{balance_display:.6f}".rstrip('0').rstrip('.'),
                 per=f"{per_send:g}", max=max_day, used=used_today,
@@ -764,14 +806,14 @@ class NewApiSuitePlugin(Star):
 
         total_raw = int(round(total_display * ratio))
         if total_display > balance_display:
-            yield event.plain_result(self.t(
+            yield self._reply(event, self.t(
                 "rp.user.exceeds_balance",
                 balance=f"{balance_display:.6f}".rstrip('0').rstrip('.'),
             ))
             return
         # 每份至少 1 原始额度，总额过低无法拆分
         if total_raw < grab_count:
-            yield event.plain_result(self.t("rp.too_small", count=grab_count))
+            yield self._reply(event, self.t("rp.too_small", count=grab_count))
             return
 
         # 锁内「查余额→扣款→建包→计数」，防并发双花；建包失败自动退款
@@ -779,13 +821,13 @@ class NewApiSuitePlugin(Star):
             fresh = await self.core.get_api_user_data(site_id)
             fresh_balance_raw = int(fresh.get("quota", 0) or 0) if fresh else 0
             if total_raw > fresh_balance_raw:
-                yield event.plain_result(self.t(
+                yield self._reply(event, self.t(
                     "rp.user.exceeds_balance",
                     balance=f"{fresh_balance_raw / ratio:.6f}".rstrip('0').rstrip('.'),
                 ))
                 return
             if not await self.core.manage_user_quota(site_id, "subtract", total_raw):
-                yield event.plain_result(self.t("rp.user.deduct_failed"))
+                yield self._reply(event, self.t("rp.user.deduct_failed"))
                 return
 
             result = await self.core.create_red_packet(identity, total_display, grab_count)
@@ -793,7 +835,7 @@ class NewApiSuitePlugin(Star):
                 refunded = await self.core.manage_user_quota(site_id, "add", total_raw)
                 if not refunded:
                     logger.error(f"[个人红包] 建包失败且退款失败！site={site_id} 金额={total_display} 请人工处理")
-                yield event.plain_result(self.t(
+                yield self._reply(event, self.t(
                     "rp.user.create_failed",
                     amount=f"{total_display:.6f}".rstrip('0').rstrip('.'),
                 ))
@@ -816,7 +858,7 @@ class NewApiSuitePlugin(Star):
         self._balance_cache[site_id] = (
             binding.get('qq_id', binding.get('openid')), fresh_balance_raw - total_raw
         )
-        yield event.plain_result(created_msg)
+        yield self._reply(event, created_msg)
 
     @filter.command("调整余额")
     @guard_errors
@@ -836,13 +878,13 @@ class NewApiSuitePlugin(Star):
             target_id = self._parse_int_safe(identifier)
 
         if target_id is None:
-            yield event.plain_result(self.t("common.at_or_id_required"))
+            yield self._reply(event, self.t("common.at_or_id_required"))
             return
 
         # 金额统一取 display_adjustment（AstrBot 已把数字参数转为 float）；0 视为未提供（调整 0 额度无意义）
         amount = display_adjustment
         if amount == 0.0:
-            yield event.plain_result(self.t("common.amount_required"))
+            yield self._reply(event, self.t("common.amount_required"))
             return
 
         status, details = await self.core.adjust_balance_by_identifier(target_id, amount)
@@ -859,7 +901,7 @@ class NewApiSuitePlugin(Star):
             case "API_UPDATE_FAILED":
                 reply = self.t("adjust.update_failed", site_id=details['website_user_id'])
 
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("打劫")
     @guard_errors
@@ -877,7 +919,7 @@ class NewApiSuitePlugin(Star):
 
         # 2. 校验
         if len(target_qq_ids) > 1:
-            yield event.plain_result(self.t("heist.too_many"))
+            yield self._reply(event, self.t("heist.too_many"))
             return
 
         if target_qq_ids:
@@ -885,7 +927,7 @@ class NewApiSuitePlugin(Star):
         else:
             raw = (identifier or "").strip()
             if not raw:
-                yield event.plain_result(self.t("heist.no_target"))
+                yield self._reply(event, self.t("heist.no_target"))
                 return
             # 文本参数：优先数字（QQ号/网站ID），否则视为 OpenID（需开启 openid 绑定）
             if raw.lstrip('-').isdigit():
@@ -893,7 +935,7 @@ class NewApiSuitePlugin(Star):
             else:
                 openid_conf = self.config.get('binding_settings', {})
                 if not openid_conf.get('enable_openid_binding', False):
-                    yield event.plain_result(self.t("heist.no_target"))
+                    yield self._reply(event, self.t("heist.no_target"))
                     return
                 victim_identifier = raw
 
@@ -958,7 +1000,7 @@ class NewApiSuitePlugin(Star):
             case _:
                 reply = self.t("heist.unknown")
         
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("榜单")
     @guard_errors
@@ -966,7 +1008,7 @@ class NewApiSuitePlugin(Star):
         """展示群内余额榜与打劫榜（余额从用户操作缓存读取，无需查API）。"""
         lb_conf = self.config.get('leaderboard_settings', {})
         if not lb_conf.get('enabled', False):
-            yield event.plain_result(self.t("leaderboard.disabled"))
+            yield self._reply(event, self.t("leaderboard.disabled"))
             return
         top_n = max(1, int(lb_conf.get('top_n', 10)))
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000)
@@ -977,7 +1019,7 @@ class NewApiSuitePlugin(Star):
         heist_lines = await self._build_heist_board(top_n, ratio)
 
         reply = self.t("leaderboard.header", top_n=top_n, balance=balance_lines, heist=heist_lines)
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.command("消耗榜")
     @guard_errors
@@ -985,19 +1027,19 @@ class NewApiSuitePlugin(Star):
         """展示全站用户近 N 小时 token 消耗排行榜（用户名 + 已绑定则附 QQ 号），所有用户可用。"""
         conf = self.config.get('consumption_leaderboard_settings', {})
         if not conf.get('enabled', False):
-            yield event.plain_result(self.t("consumption.disabled"))
+            yield self._reply(event, self.t("consumption.disabled"))
             return
         top_n = max(1, int(conf.get('top_n', 10)))
         hours = max(1, int(conf.get('window_hours', 24)))
 
-        yield event.plain_result(self.t("consumption.fetching", hours=hours))
+        yield self._reply(event, self.t("consumption.fetching", hours=hours))
 
         stats = await self.core.get_user_token_consumption(hours=hours)
         if stats is None:
-            yield event.plain_result(self.t("consumption.fetch_failed"))
+            yield self._reply(event, self.t("consumption.fetch_failed"))
             return
         if not stats:
-            yield event.plain_result(self.t("consumption.no_data", hours=hours))
+            yield self._reply(event, self.t("consumption.no_data", hours=hours))
             return
 
         stats.sort(key=lambda x: x['tokens'], reverse=True)
@@ -1099,7 +1141,7 @@ class NewApiSuitePlugin(Star):
                 f"[消耗榜][DEBUG] 实例#{id(self) % 0xffff} 渲染首行={lines[0] if lines else '(空)'}"
             )
             logger.info(f"[消耗榜][DEBUG] 实例#{id(self) % 0xffff} 渲染全文>>>\n{reply}\n<<<全文结束")
-        yield event.plain_result(reply)
+        yield self._reply(event, reply)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def handle_group_decrease(self, event: AstrMessageEvent):

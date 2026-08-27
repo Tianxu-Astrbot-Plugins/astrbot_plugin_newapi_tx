@@ -107,6 +107,10 @@
       "description": "Debug mode (keep off for daily use)",
       "enabled": { "description": "When enabled, verbose diagnostic logs are emitted (e.g. per-line cache values / final values of the consumption board, full rendered text) to locate display issues" }
     },
+    "reply_settings": {
+      "description": "Reply output",
+      "official_markdown": { "description": "Markdown for official-bot replies: requests arriving via the official bot (QQ/OpenID) are sent as QQ native markdown (newlines converted to \\r); wild-bot replies stay plain text. If the official bot lacks native-markdown permission, AstrBot falls back to plain text automatically" }
+    },
     "red_packet_settings": {
       "description": "Red packets (lucky-grab, minted by admins)",
       "enabled": { "description": "Whether the red packet feature is enabled" },

@@ -175,6 +175,13 @@
             }
         }
     },
+    "reply_settings": {
+        "description": "回复输出",
+        "type": "object",
+        "items": {
+            "official_markdown": { "description": "官机回复使用Markdown：来自官方机器人(QQ/OpenID)的请求，回复按 QQ 原生 Markdown 发送（换行自动转 \\r）；野机始终保持纯文本。官方机器人无 Markdown 权限时框架自动回退普通文本", "type": "bool", "default": true }
+        }
+    },
     "red_packet_settings": {
         "description": "红包（拼手气，管理员凭空发放）",
         "type": "object",
