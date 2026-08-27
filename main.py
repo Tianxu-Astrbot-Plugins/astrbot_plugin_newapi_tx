@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 from typing import Any, Dict, Optional, Tuple
 from functools import wraps
@@ -160,6 +161,18 @@ class NewApiSuitePlugin(Star):
         """发送方是否野机身份（数字 QQ 号）。官机（OpenID）为非数字字符串。"""
         sender = event.get_sender_id()
         return isinstance(sender, int) or str(sender).strip().lstrip('-').isdigit()
+
+    def _sender_display(self, event: AstrMessageEvent) -> str:
+        """领取人展示名：优先群消息自带昵称，回退到身份字符串。"""
+        try:
+            mo = getattr(event, 'message_obj', None)
+            s = getattr(mo, 'sender', None)
+            n = getattr(s, 'nickname', None) or getattr(s, 'display_name', None)
+            if n and str(n).strip():
+                return str(n)
+        except Exception:
+            pass
+        return str(event.get_sender_id())
 
     # --- 回复输出 ---
 
@@ -666,7 +679,7 @@ class NewApiSuitePlugin(Star):
             return
         amount_str = f"{total_display:.6f}".rstrip('0').rstrip('.')
         created_msg = self.t(
-            "rp.created", pid=result['pid'], count=grab_count,
+            "rp.created", pid=result.get('code', result['pid']), count=grab_count,
             amount=amount_str, hours=result['expire_hours'], creator=creator,
         )
         # 仅官机模式下，公告附提示，引导用户去官方机器人处抢
@@ -678,19 +691,18 @@ class NewApiSuitePlugin(Star):
     @guard_errors
     @require_group_whitelist
     async def handle_grab_red_packet(self, event: AstrMessageEvent, packet_id: str = ""):
-        """抢拼手气红包：抢红包 红包编号。额度直接入账网站余额。可配置仅限官机（OpenID 身份）。"""
+        """抢拼手气红包：抢红包 红包代码（字母数字，发红包时公布）。额度直接入账网站余额。可配置仅限官机。"""
         # 「红包仅官机」：野机（数字 QQ 身份）的请求静默忽略——不回复、零消息量，降低野机风控风险
         if self._red_packet_official_only_blocked(event, "抢红包"):
             return
 
-        raw_pid = str(packet_id or "").strip()
-        if not raw_pid:
+        raw_ref = str(packet_id or "").strip()
+        if not raw_ref:
             yield self._reply(event, self.t("rp.pid_required"))
             return
-        if not raw_pid.isdigit():
-            yield self._reply(event, self.t("rp.pid_invalid", input=raw_pid))
+        if not re.fullmatch(r"[a-zA-Z0-9]{1,16}", raw_ref):
+            yield self._reply(event, self.t("rp.pid_invalid", input=raw_ref))
             return
-        pid = int(raw_pid)
 
         identity = str(event.get_sender_id())
         binding = await self.core.get_user_by_identity(identity)
@@ -698,15 +710,22 @@ class NewApiSuitePlugin(Star):
             yield self._reply(event, self.t("not_bound"))
             return
         site_id = binding['website_user_id']
+        grabber_name = self._sender_display(event)
 
-        status, details = await self.core.grab_red_packet(pid, identity, site_id)
+        status, details = await self.core.grab_red_packet(
+            raw_ref.lower(), identity, site_id, grabber_name=grabber_name
+        )
 
         reply = ""
         match status:
             case "SUCCESS":
-                amount_str = f"{details['amount_display']:.6f}"
-                reply = self.t("rp.success", amount=amount_str,
+                amount_str = f"{details['amount_display']:.6f}".rstrip('0').rstrip('.')
+                reply = self.t("rp.success", grabber=grabber_name,
+                               amount=amount_str,
                                remain=details['remain'], total=details['total'])
+                # 抢完排行榜：金额由多到少公布领取者（超过20人只展示前20）
+                if details.get("exhausted") and details.get("entries"):
+                    reply += "\n\n" + self.t("rp.rank.header") + "\n" + self._format_rp_rank(details["entries"])
                 # 抢到后顺便更新余额缓存，供排行榜使用
                 data = await self.core.get_api_user_data(site_id)
                 if data:
@@ -720,13 +739,26 @@ class NewApiSuitePlugin(Star):
             case "EXPIRED":
                 reply = self.t("rp.expired")
             case "NOT_FOUND":
-                reply = self.t("rp.not_found", pid=pid)
+                reply = self.t("rp.not_found", pid=raw_ref)
             case "DISABLED":
                 reply = self.t("rp.disabled")
             case _:
                 reply = self.t("rp.api_error")
 
         yield self._reply(event, reply)
+
+    def _format_rp_rank(self, entries: list) -> str:
+        """红包抢完排行文本：金额降序，前三名带奖牌，最多展示 20 人并注明剩余人数。"""
+        medals = ["🥇 ", "🥈 ", "🥉 "]
+        lines = []
+        for i, e in enumerate(entries[:20]):
+            rank = medals[i] if i < 3 else f"{i + 1}. "
+            amt = f"{e['display']:.6f}".rstrip('0').rstrip('.')
+            lines.append(self.t("rp.rank.line", rank=rank, name=e['name'], amount=amt))
+        text = "\n".join(lines)
+        if len(entries) > 20:
+            text += "\n" + self.t("rp.rank.more", n=len(entries) - 20)
+        return text
 
     # --- 个人红包（普通用户，扣自己额度）辅助方法 ---
 
@@ -912,7 +944,7 @@ class NewApiSuitePlugin(Star):
         new_balance_display = (fresh_balance_raw - total_raw) / ratio
         amount_str = f"{total_display:.6f}".rstrip('0').rstrip('.')
         created_msg = self.t(
-            "rp.user.created", creator=f"网站ID {site_id}", pid=result['pid'], count=grab_count,
+            "rp.user.created", creator=f"网站ID {site_id}", pid=result.get('code', result['pid']), count=grab_count,
             amount=amount_str, hours=result['expire_hours'],
             balance=f"{new_balance_display:.6f}".rstrip('0').rstrip('.'),
             left=max(0, remaining - 1),

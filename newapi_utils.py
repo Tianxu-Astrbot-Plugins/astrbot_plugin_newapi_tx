@@ -181,6 +181,20 @@ class NewApiCore:
     #  建表                                                           #
     # ------------------------------------------------------------------ #
 
+    async def _ensure_column_mysql(self, table: str, column: str, ddl: str):
+        """MySQL 缺列补列（老库平滑迁移 rp_code / grabber_name 等新字段）。"""
+        try:
+            rows = await self.execute_query(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
+                (table, column), fetch='all'
+            )
+            if not rows:
+                await self.execute_query(f"ALTER TABLE `{table}` ADD COLUMN {ddl}")
+                logger.info(f"[NewAPI Utils] MySQL 已为 {table} 补充新列: {column}")
+        except Exception as e:
+            logger.warning(f"[NewAPI Utils] MySQL 检查/补充列 {table}.{column} 失败: {e}")
+
     async def _ensure_tables_exist_mysql(self):
         """MySQL 模式：创建必要的数据表。"""
         logger.info("[NewAPI Utils] MySQL 建表检查中...")
@@ -258,9 +272,12 @@ class NewApiCore:
               `status` varchar(12) NOT NULL DEFAULT 'ACTIVE',
               `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
               `expire_at` timestamp NULL DEFAULT NULL,
+              `rp_code` varchar(24) NULL DEFAULT NULL COMMENT '对外红包代码(字母数字,可复用)',
               PRIMARY KEY (`id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
+            await self._ensure_column_mysql("newapi_red_packets", "rp_code",
+                                            "varchar(24) NULL DEFAULT NULL")
             await self.execute_query("""
             CREATE TABLE IF NOT EXISTS `newapi_red_packet_records` (
               `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -269,16 +286,30 @@ class NewApiCore:
               `website_user_id` int(11) NOT NULL,
               `amount_raw` bigint(20) NOT NULL,
               `grabbed_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `grabber_name` varchar(128) NULL DEFAULT NULL COMMENT '领取人昵称',
               PRIMARY KEY (`id`),
               UNIQUE KEY `packet_identity` (`packet_id`,`identity`),
               KEY `idx_packet` (`packet_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
             """)
+            await self._ensure_column_mysql("newapi_red_packet_records", "grabber_name",
+                                            "varchar(128) NULL DEFAULT NULL")
             logger.info("[NewAPI Utils] MySQL 数据表结构已确认就绪。")
             return True
         except Exception as e:
             logger.error(f"[NewAPI Utils] MySQL 建表失败: {e}", exc_info=True)
             return False
+
+    async def _ensure_column_sqlite(self, table: str, column: str, ddl: str):
+        """SQLite 缺列补列（PRAGMA 检查后 ALTER）。"""
+        try:
+            cur = await self.db_conn.execute(f"PRAGMA table_info({table})")
+            cols = await cur.fetchall()
+            if not any((c[1] if not isinstance(c, dict) else c.get("name")) == column for c in cols):
+                await self.execute_query(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+                logger.info(f"[NewAPI Utils] SQLite 已为 {table} 补充新列: {column}")
+        except Exception as e:
+            logger.warning(f"[NewAPI Utils] SQLite 检查/补充列 {table}.{column} 失败: {e}")
 
     async def _ensure_tables_exist_sqlite(self):
         """SQLite 模式：创建必要的数据表。"""
@@ -345,9 +376,11 @@ class NewApiCore:
               shares_json TEXT NOT NULL,
               status TEXT NOT NULL DEFAULT 'ACTIVE',
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
-              expire_at TEXT
+              expire_at TEXT,
+              rp_code TEXT
             );
             """)
+            await self._ensure_column_sqlite("newapi_red_packets", "rp_code", "TEXT")
             await self._execute_sqlite("""
             CREATE TABLE IF NOT EXISTS newapi_red_packet_records (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -356,9 +389,11 @@ class NewApiCore:
               website_user_id INTEGER NOT NULL,
               amount_raw INTEGER NOT NULL,
               grabbed_at TEXT NOT NULL DEFAULT (datetime('now')),
+              grabber_name TEXT,
               UNIQUE (packet_id, identity)
             );
             """)
+            await self._ensure_column_sqlite("newapi_red_packet_records", "grabber_name", "TEXT")
             logger.info("[NewAPI Utils] SQLite 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -655,11 +690,38 @@ class NewApiCore:
                 return None
         return None
 
+    # 红包代码字符集：小写字母+数字，剔除易混淆的 i/l/o/0/1
+    RP_CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+    async def _rp_existing_codes(self) -> set:
+        """仍处于「有效期 + 过期后 7 天冷却」内的红包代码集合；冷却结束的代码视为可复用。"""
+        try:
+            cutoff = self._format_datetime_for_sqlite(datetime.utcnow() - timedelta(days=7))
+            rows = await self.execute_query(
+                "SELECT rp_code FROM newapi_red_packets "
+                "WHERE rp_code IS NOT NULL AND expire_at > %s",
+                (cutoff,), fetch='all'
+            )
+            return {r["rp_code"] for r in rows} if rows else set()
+        except Exception as e:
+            logger.warning(f"[NewAPI Utils] 查询红包代码占用失败（按空处理）: {e}")
+            return set()
+
+    def _gen_rp_code(self, existing: set) -> str:
+        """生成不与冷却期内代码冲突的 6 位随机码。"""
+        for length in (6, 7, 8):
+            for _ in range(50):
+                code = "".join(random.choice(self.RP_CODE_ALPHABET) for _ in range(length))
+                if code not in existing:
+                    return code
+        raise RuntimeError("红包代码生成失败")
+
     async def create_red_packet(self, creator_identity: str,
                                 total_display: float, grab_count: int) -> Dict[str, Any]:
-        """创建拼手气红包（凭空发放）。返回 {"pid", "total_display", "grab_count", "expire_hours"}。
+        """创建拼手气红包（凭空发放）。返回 {"pid", "code", "total_display", "grab_count", "expire_hours"}。
 
         金额按原始额度整数预拆分，保证各份之和精确等于总额。
+        对外仅公布 code（6位随机码）；代码在「过期+7天冷却」后允许被复用。
         """
         conf = self.config.get('red_packet_settings', {})
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
@@ -674,22 +736,56 @@ class NewApiCore:
         now_s = self._format_datetime_for_sqlite(now)
         exp_s = self._format_datetime_for_sqlite(expire)
 
+        code = self._gen_rp_code(await self._rp_existing_codes())
         pid = await self.execute_query(
             "INSERT INTO newapi_red_packets (creator_identity, total_raw, total_display, display_ratio, "
-            "grab_count, remain_count, shares_json, status, created_at, expire_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'ACTIVE', %s, %s)",
+            "grab_count, remain_count, shares_json, status, created_at, expire_at, rp_code) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'ACTIVE', %s, %s, %s)",
             (creator_identity, total_raw, float(total_display), ratio, grab_count, grab_count,
-             json.dumps(shares), now_s, exp_s),
+             json.dumps(shares), now_s, exp_s, code),
             return_lastrowid=True,
         )
         pid = int(pid) if pid else 0
-        logger.info(f"[NewAPI Utils] 红包 #{pid} 已创建：{total_display} 额度 / {grab_count} 份 / {expire_hours}h 有效")
-        return {"pid": pid, "total_display": total_display, "grab_count": grab_count,
-                "expire_hours": expire_hours}
+        logger.info(f"[NewAPI Utils] 红包 #{pid}({code}) 已创建：{total_display} 额度 / {grab_count} 份 / {expire_hours}h 有效")
+        return {"pid": pid, "code": code, "total_display": total_display,
+                "grab_count": grab_count, "expire_hours": expire_hours}
 
-    async def grab_red_packet(self, packet_id: int, identity: str,
-                              website_user_id: int) -> Tuple[str, Dict[str, Any]]:
-        """抢红包。锁内完成：有效期校验 → 重复领取校验 → 取份额 → 入账 → 记录 → 扣减剩余份数。
+    async def resolve_rp_packet(self, ref: str) -> Optional[Dict]:
+        """按对外代码或数字 ID 解析红包行；数字优先按主键查，找不到再按代码查。"""
+        ref = str(ref or "").strip().lower()
+        if not ref:
+            return None
+        if ref.isdigit():
+            row = await self.execute_query(
+                "SELECT * FROM newapi_red_packets WHERE id = %s", (int(ref),), fetch='one'
+            )
+            if row:
+                return row
+        return await self.execute_query(
+            "SELECT * FROM newapi_red_packets WHERE rp_code = %s", (ref,), fetch='one'
+        )
+
+    async def _rp_summary_entries(self, packet_id: int) -> list:
+        """汇总某红包的全部领取记录，按金额从多到少排序。"""
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+        rows = await self.execute_query(
+            "SELECT COALESCE(grabber_name, '') AS gname, identity, amount_raw "
+            "FROM newapi_red_packet_records WHERE packet_id = %s",
+            (packet_id,), fetch='all'
+        )
+        entries = [
+            {"name": (r["gname"] or r["identity"]),
+             "display": int(r["amount_raw"]) / ratio}
+            for r in (rows or [])
+        ]
+        entries.sort(key=lambda e: e["display"], reverse=True)
+        return entries
+
+    async def grab_red_packet(self, packet_ref: str, identity: str,
+                              website_user_id: int,
+                              grabber_name: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
+        """抢红包（支持对外代码或数字ID）。锁内完成：有效期校验 → 重复领取校验 →
+        取份额 → 入账 → 记录(含昵称) → 扣减剩余份数；全部抢完时附带降序排行数据。
 
         status: SUCCESS / ALREADY / EMPTY / EXPIRED / NOT_FOUND / DISABLED / API_ERROR
         """
@@ -697,6 +793,12 @@ class NewApiCore:
         if not conf.get('enabled', True):
             return "DISABLED", {}
         ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+
+        # 先解析真实主键，再按主键加锁，保证同一红包并发串行
+        p0 = await self.resolve_rp_packet(packet_ref)
+        if not p0:
+            return "NOT_FOUND", {}
+        packet_id = int(p0["id"])
 
         lock = self._get_red_packet_lock(packet_id)
         async with lock:
@@ -737,9 +839,9 @@ class NewApiCore:
 
             try:
                 await self.execute_query(
-                    "INSERT INTO newapi_red_packet_records (packet_id, identity, website_user_id, amount_raw) "
-                    "VALUES (%s, %s, %s, %s)",
-                    (packet_id, identity, website_user_id, amount_raw)
+                    "INSERT INTO newapi_red_packet_records (packet_id, identity, website_user_id, amount_raw, grabber_name) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (packet_id, identity, website_user_id, amount_raw, grabber_name)
                 )
             except Exception as e:
                 # 唯一键冲突=已抢过（并发兜底）；其他异常同样不重复入账
@@ -753,11 +855,16 @@ class NewApiCore:
                 (new_remain, new_status, packet_id)
             )
 
-            return "SUCCESS", {
+            details = {
                 "amount_display": amount_raw / ratio,
                 "remain": new_remain,
                 "total": int(p['grab_count']),
+                "code": p.get('rp_code') or str(packet_id),
             }
+            if new_status == 'EXHAUSTED':
+                details["exhausted"] = True
+                details["entries"] = await self._rp_summary_entries(packet_id)
+            return "SUCCESS", details
 
     # ------------------------------------------------------------------ #
     #  API 请求                                                       #
