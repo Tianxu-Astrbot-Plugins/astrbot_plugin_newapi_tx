@@ -290,11 +290,27 @@ class NewApiSuitePlugin(Star):
             await self.put_kv_data("binding_cache", cache)
 
     @staticmethod
-    def _extract_at_qq(event: AstrMessageEvent) -> Optional[int]:
-        """提取消息中第一个 @ 提及（排除机器人自身）的 QQ 号，无则返回 None。"""
+    def _self_id_str(event: AstrMessageEvent) -> str:
+        """机器人自身标识的字符串形式（野机为数字 QQ，官机为 OpenID 字符串）。"""
+        try:
+            return str(event.get_self_id() or "").strip()
+        except Exception:
+            return ""
+
+    @classmethod
+    def _extract_at_qq(cls, event: AstrMessageEvent) -> Optional[int]:
+        """提取消息中第一个 @ 提及（排除机器人自身）的目标，无则返回 None。
+
+        官机（QQ 官方机器人）下 @ 段与机器人自身 ID 都是 OpenID 字符串而非数字 QQ，
+        故一律按字符串比较，避免 int() 转换在官机上抛出 ValueError。
+        返回值可能是数字 QQ 或 OpenID 字符串，交由 lookup_binding 统一解析。
+        """
+        self_id = cls._self_id_str(event)
         for seg in event.get_messages():
-            if isinstance(seg, At) and seg.qq != int(event.get_self_id()):
-                return seg.qq
+            if isinstance(seg, At):
+                target = str(getattr(seg, "qq", "") or "").strip()
+                if target and target != self_id:
+                    return seg.qq
         return None
 
     @staticmethod
@@ -1086,11 +1102,29 @@ class NewApiSuitePlugin(Star):
             return
         plans.sort(key=lambda p: (p.get('sort_order') or 0, p.get('id') or 0))
         lines = [self._fmt_plan_line(p, ratio) for p in plans]
-        site_url = (self.core.api_base_url or "").rstrip("/")
         yield self._reply(event, self.t(
             "sub.plans.header", count=len(plans), lines="\n".join(lines),
-            url=f"{site_url}/console/subscription" if site_url else "-",
+            entry=self._buy_entry_text(),
         ))
+
+    def _buy_entry_text(self) -> str:
+        """购买入口文案。仅当配置了「对外 URL」时才显示完整链接。
+
+        绝不回退到 api_base_url（内网地址），避免把内部地址泄漏到群里；
+        未配置时只显示站内相对路径。
+        """
+        conf = self.config.get('subscription_settings', {}) or {}
+        raw = str(conf.get('public_url') or "").strip()
+        path = "/console/subscription"
+        if not raw:
+            return self.t("sub.buy_entry.path", path=path)
+        if not raw.lower().startswith(("http://", "https://")):
+            logger.warning(
+                f"[订阅套餐] public_url 缺少 http(s):// 前缀，改为仅显示路径以免拼出无效链接: {raw!r}"
+            )
+            base = raw.rstrip('/')
+            return self.t("sub.buy_entry.path", path=(base + path) if base.startswith('/') else path)
+        return self.t("sub.buy_entry.url", url=f"{raw.rstrip('/')}{path}")
 
     @filter.command("套餐")
     @guard_errors
@@ -1407,10 +1441,12 @@ class NewApiSuitePlugin(Star):
         robber_qq_id = event.get_sender_id()
 
         # 1. 提取目标：优先 @ 提及，其次文本参数（QQ号 / 网站ID / OpenID）
+        # 注意：官机上 @ 段与机器人自身 ID 均为 OpenID 字符串，统一按字符串比较，避免 int() 崩溃
+        _self_id = self._self_id_str(event)
         target_qq_ids = [
-            seg.qq  # 从At消息段中提取qq号
+            seg.qq  # 从At消息段中提取目标标识（野机为QQ号，官机为OpenID）
             for seg in event.get_messages()
-            if isinstance(seg, At) and seg.qq != int(event.get_self_id())
+            if isinstance(seg, At) and str(getattr(seg, "qq", "") or "").strip() not in ("", _self_id)
         ]
 
         # 2. 校验
