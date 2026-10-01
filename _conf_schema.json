@@ -175,6 +175,17 @@
             }
         }
     },
+    "subscription_settings": {
+        "description": "New API 订阅套餐（需站点为支持订阅功能的新版 New API；接口不存在时会明确提示）",
+        "type": "object",
+        "items": {
+            "enabled": { "description": "是否启用套餐相关命令（套餐 / 购买套餐 / 开通套餐 / 查套餐 / 取消套餐）；老版 New API 无订阅接口，保持关闭", "type": "bool", "default": false },
+            "allow_user_purchase": { "description": "是否允许用户自助「购买套餐」：用管理员令牌代扣自己余额 + 附加套餐（两步式，失败自动退款；不产生站点官方订单）", "type": "bool", "default": false },
+            "enforce_allow_balance_pay": { "description": "用户购买时是否遵守套餐的 allow_balance_pay 开关（站点官方余额购买会校验，代扣路径不会，插件侧补上）", "type": "bool", "default": true },
+            "official_only": { "description": "套餐指令仅限官机：开启后野机（数字 QQ 身份）的套餐命令被静默忽略，避免野机刷指令触发风控", "type": "bool", "default": false },
+            "revoke_group_on_leave_skip_subscribed": { "description": "退群恢复用户组时跳过有生效订阅的用户：套餐可能带 upgrade_group，无条件改回默认组会抹掉套餐权益", "type": "bool", "default": true }
+        }
+    },
     "reply_settings": {
         "description": "回复输出",
         "type": "object",
