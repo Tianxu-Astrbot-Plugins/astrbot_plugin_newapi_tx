@@ -958,6 +958,404 @@ class NewApiSuitePlugin(Star):
         )
         yield self._reply(event, created_msg)
 
+    # --- 订阅套餐（需站点为支持订阅的新版 New API） ---
+
+    def _sub_enabled(self) -> bool:
+        """订阅套餐功能是否启用（subscription_settings.enabled，默认关）。"""
+        try:
+            conf = self.config.get('subscription_settings', {}) or {}
+            return bool(conf.get('enabled', False))
+        except Exception:
+            return False
+
+    def _sub_official_only_blocked(self, event: AstrMessageEvent, cmd: str = "") -> bool:
+        """「套餐仅官机」开启且请求来自野机（数字 QQ 身份）时返回 True（调用方静默忽略）。
+
+        判定规则与红包门控一致：数字(QQ)=野机 → 拦截；非数字(OpenID)=官机 → 放行。
+        """
+        conf = self.config.get('subscription_settings', {}) or {}
+        on = bool(conf.get('official_only', False))
+        wild = self._is_wild_bot_sender(event)
+        if on and wild:
+            logger.info(f"[套餐仅官机] 已静默忽略野机请求 cmd={cmd} sender={event.get_sender_id()!r}")
+        return on and wild
+
+    def _fmt_local_ts(self, ts) -> str:
+        """Unix 秒 → 本地时间字符串（复用签到配置的时区偏移）。"""
+        try:
+            offset = float(self.config.get('check_in_settings.timezone_offset_hours', 0) or 0)
+            return (datetime.utcfromtimestamp(int(ts)) + timedelta(hours=offset)).strftime("%Y-%m-%d %H:%M")
+        except (TypeError, ValueError, OverflowError, OSError):
+            return "-"
+
+    def _fmt_plan_duration(self, plan: Dict) -> str:
+        """按时长单位渲染套餐有效期，不写死「天」。"""
+        try:
+            value = plan.get('duration_value')
+            unit = str(plan.get('duration_unit') or '').lower()
+            if value in (None, ""):
+                return self.t("sub.duration.custom")
+            value_text = f"{int(value):g}" if float(value).is_integer() else f"{value}"
+        except (TypeError, ValueError):
+            return self.t("sub.duration.custom")
+        key = {
+            "hour": "sub.duration.hour", "day": "sub.duration.day",
+            "month": "sub.duration.month", "year": "sub.duration.year",
+            "custom": "sub.duration.custom",
+        }.get(unit)
+        return self.t(key, value=value_text) if key else self.t("sub.duration.custom")
+
+    def _fmt_plan_line(self, plan: Dict, ratio: int) -> str:
+        """套餐一行摘要：编号 · 标题 · 价格 · 时长 · 额度 · 重置周期。"""
+        price = plan.get('price_amount')
+        currency = str(plan.get('currency') or '').strip()
+        try:
+            price_text = f"{float(price):g} {currency}".strip()
+        except (TypeError, ValueError):
+            price_text = self.t("common.unknown")
+        amount_raw = plan.get('total_amount')
+        try:
+            amount_text = f"{int(amount_raw) / ratio:.6f}".rstrip('0').rstrip('.') if amount_raw else "-"
+        except (TypeError, ValueError, ZeroDivisionError):
+            amount_text = "-"
+        reset = str(plan.get('quota_reset_period') or '').strip()
+        reset_text = self.t("sub.reset.period", period=reset) if reset and reset.lower() not in ("none", "never") else ""
+        return self.t(
+            "sub.plans.line", id=plan.get('id'), title=plan.get('title') or "-",
+            price=price_text, duration=self._fmt_plan_duration(plan),
+            amount=amount_text, reset=reset_text,
+        )
+
+    def _fmt_sub_status(self, status: str) -> str:
+        key = {
+            "active": "sub.status.active", "expired": "sub.status.expired",
+            "cancelled": "sub.status.cancelled",
+        }.get(str(status or "").lower())
+        return self.t(key) if key else str(status or self.t("common.unknown"))
+
+    def _fmt_sub_line(self, sub: Dict, ratio: int) -> str:
+        """订阅一行摘要：订阅编号 · 套餐 · 已用/总量 · 有效期 · 状态 · 来源。"""
+        try:
+            total = int(sub.get('amount_total') or 0) / ratio
+            used = int(sub.get('amount_used') or 0) / ratio
+            usage = f"{used:.6f}".rstrip('0').rstrip('.') + " / " + f"{total:.6f}".rstrip('0').rstrip('.')
+        except (TypeError, ValueError, ZeroDivisionError):
+            usage = "-"
+        end = self._fmt_local_ts(sub.get('end_time')) if sub.get('end_time') else self.t("sub.never_expire")
+        source = str(sub.get('source') or '').lower()
+        source_text = self.t("sub.source.admin") if source == "admin" else self.t("sub.source.order")
+        return self.t(
+            "sub.list.line", id=sub.get('id'), plan=sub.get('plan_id'),
+            usage=usage, end=end, status=self._fmt_sub_status(sub.get('status')),
+            source=source_text,
+        )
+
+    async def _resolve_site_target(self, event: AstrMessageEvent, identifier: str):
+        """解析套餐命令目标：@提及 > 纯数字(网站ID/QQ号) > OpenID 字符串。
+
+        返回 (site_id, binding, 展示标签)；无法解析返回 (None, None, "")。
+        """
+        at_qq = self._extract_at_qq(event)
+        raw = str(identifier or "").strip()
+        lookup_id = at_qq if at_qq is not None else (self._parse_int_safe(raw) if raw else None)
+        if lookup_id is None and not raw:
+            return None, None, ""
+        id_type, binding = await self.core.lookup_binding(lookup_id if lookup_id is not None else raw)
+        if id_type == "NOT_FOUND" or not binding:
+            return None, None, str(lookup_id if lookup_id is not None else raw)
+        site_id = binding['website_user_id']
+        label = f"@{lookup_id}" if at_qq is not None else str(lookup_id if lookup_id is not None else raw)
+        return site_id, binding, label
+
+    async def _emit_plans(self, event: AstrMessageEvent):
+        """输出站点套餐列表（只读，用户与管理员共用）。"""
+        if not self._sub_enabled():
+            yield self._reply(event, self.t("sub.disabled"))
+            return
+        status, plans = await self.core.list_subscription_plans(include_disabled=False)
+        if status == "NOT_SUPPORTED":
+            yield self._reply(event, self.t("sub.unsupported"))
+            return
+        if status != "OK":
+            yield self._reply(event, self.t("sub.api_error"))
+            return
+
+        ratio = await self.core.get_quota_per_unit() or self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+        if not plans:
+            yield self._reply(event, self.t("sub.plans.empty"))
+            return
+        plans.sort(key=lambda p: (p.get('sort_order') or 0, p.get('id') or 0))
+        lines = [self._fmt_plan_line(p, ratio) for p in plans]
+        site_url = (self.core.api_base_url or "").rstrip("/")
+        yield self._reply(event, self.t(
+            "sub.plans.header", count=len(plans), lines="\n".join(lines),
+            url=f"{site_url}/console/subscription" if site_url else "-",
+        ))
+
+    @filter.command("套餐")
+    @guard_errors
+    async def handle_subscription_plans(self, event: AstrMessageEvent):
+        """查看站点订阅套餐列表（只读）。"""
+        async for item in self._emit_plans(event):
+            yield item
+
+    @filter.command("套餐列表")
+    @guard_errors
+    async def handle_subscription_plans_alias(self, event: AstrMessageEvent):
+        """查看站点订阅套餐列表（`套餐` 的别名）。"""
+        async for item in self._emit_plans(event):
+            yield item
+
+    @filter.command("购买套餐")
+    @guard_errors
+    @require_group_whitelist
+    @require_binding
+    async def handle_purchase_subscription(self, event: AstrMessageEvent, plan_id: str = ""):
+        """用户自助购买套餐（方案3）：管理员令牌代扣自己余额 + 附加套餐，失败自动退款。
+
+        前置：站点支持订阅、`allow_user_purchase` 开启、已绑定、已完成「验证令牌」身份验证。
+        """
+        # 「套餐仅官机」：野机请求静默忽略
+        if self._sub_official_only_blocked(event, "购买套餐"):
+            return
+        conf = self.config.get('subscription_settings', {}) or {}
+        if not self._sub_enabled():
+            yield self._reply(event, self.t("sub.disabled"))
+            return
+        if not conf.get('allow_user_purchase', False):
+            yield self._reply(event, self.t("sub.buy.disabled"))
+            return
+
+        raw_plan = str(plan_id or "").strip()
+        if not raw_plan:
+            yield self._reply(event, self.t("sub.buy.usage"))
+            return
+        plan_no = self._parse_int_safe(raw_plan)
+        if plan_no is None:
+            yield self._reply(event, self.t("sub.plan_invalid", input=raw_plan))
+            return
+
+        identity = str(event.get_sender_id())
+        binding = event.binding
+        site_id = int(binding['website_user_id'])
+
+        # 身份验证门槛：复用「验证令牌」结果（证明其拥有该网站账号）
+        if str(site_id) not in await self._rp_verified_sites():
+            yield self._reply(event, self.t("sub.buy.not_verified"))
+            return
+
+        status, plans = await self.core.list_subscription_plans(include_disabled=True)
+        if status == "NOT_SUPPORTED":
+            yield self._reply(event, self.t("sub.unsupported"))
+            return
+        if status != "OK":
+            yield self._reply(event, self.t("sub.api_error"))
+            return
+        plan = next((p for p in plans if p.get('id') == plan_no), None)
+        if not plan:
+            yield self._reply(event, self.t("sub.plan_not_found", plan=plan_no))
+            return
+        if not plan.get('enabled', True):
+            yield self._reply(event, self.t("sub.buy.plan_disabled", plan=plan_no))
+            return
+        if conf.get('enforce_allow_balance_pay', True) and not plan.get('allow_balance_pay', True):
+            yield self._reply(event, self.t("sub.buy.allow_balance_pay_blocked", title=plan.get('title') or f"#{plan_no}"))
+            return
+
+        cost_raw = await self.core.compute_plan_cost_raw(plan)
+        if cost_raw is None:
+            yield self._reply(event, self.t("sub.api_error"))
+            return
+        ratio = self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+        title = plan.get('title') or f"#{plan_no}"
+
+        # 单项限购：max_purchase_per_user（0/未设表示不限）
+        max_per_user = plan.get('max_purchase_per_user') or 0
+        if max_per_user:
+            owned = await self.core.count_active_subscriptions_for_plan(site_id, plan_no)
+            if owned is not None and owned >= int(max_per_user):
+                yield self._reply(event, self.t(
+                    "sub.buy.limit_reached", title=title, max=int(max_per_user), owned=owned,
+                ))
+                return
+
+        async with self.core._get_sub_lock(site_id):
+            # 锁内二次复核余额，避免并发双花（subtract 不校验余额，必须插件自校验）
+            api_user = await self.core.get_api_user_data(site_id)
+            if not api_user:
+                yield self._reply(event, self.t("sub.buy.balance_unavailable"))
+                return
+            balance_raw = int(api_user.get("quota", 0) or 0)
+            if balance_raw < cost_raw:
+                yield self._reply(event, self.t(
+                    "sub.buy.insufficient",
+                    need=f"{cost_raw / ratio:.6f}".rstrip('0').rstrip('.'),
+                    balance=f"{balance_raw / ratio:.6f}".rstrip('0').rstrip('.'),
+                ))
+                return
+
+            # 第一步：扣款（失败可直接中止，无副作用）
+            if not await self.core.manage_user_quota(site_id, "subtract", cost_raw):
+                yield self._reply(event, self.t("sub.buy.deduct_failed"))
+                return
+
+            # 第二步：附加套餐；失败必须按原额退回
+            st, msg = await self.core.bind_subscription(site_id, plan_no)
+            if st != "OK":
+                refunded = await self.core.manage_user_quota(site_id, "add", cost_raw)
+                logger.error(
+                    f"[购买套餐] 附加套餐失败，已尝试退款：site={site_id} plan={plan_no} "
+                    f"cost_raw={cost_raw} refunded={refunded} err={msg}"
+                )
+                yield self._reply(event, self.t(
+                    "sub.buy.failed_refunded",
+                    amount=f"{cost_raw / ratio:.6f}".rstrip('0').rstrip('.'),
+                    err=msg or "-",
+                ))
+                return
+
+            # 回读确认
+            chk_status, subs = await self.core.get_user_subscriptions(site_id)
+            sub_line = ""
+            if chk_status == "OK":
+                actives = [s for s in subs
+                           if str(s.get('status', '')).lower() == "active" and s.get('plan_id') == plan_no]
+                if actives:
+                    newest = max(actives, key=lambda s: s.get('id') or 0)
+                    sub_line = self.t(
+                        "sub.buy.confirmed", id=newest.get('id'),
+                        end=self._fmt_local_ts(newest.get('end_time')) if newest.get('end_time')
+                        else self.t("sub.never_expire"),
+                    )
+
+        new_balance = (balance_raw - cost_raw) / ratio
+        self._balance_cache[site_id] = (
+            binding.get('qq_id', binding.get('openid')), balance_raw - cost_raw
+        )
+        yield self._reply(event, self.t(
+            "sub.buy.success", title=title, plan=plan_no,
+            cost=f"{cost_raw / ratio:.6f}".rstrip('0').rstrip('.'),
+            balance=f"{new_balance:.6f}".rstrip('0').rstrip('.'),
+            extra=(f"\n{sub_line}" if sub_line else "") + (f"\n{msg}" if msg else ""),
+        ))
+
+    @filter.command("开通套餐")
+    @guard_errors
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def handle_bind_subscription(self, event: AstrMessageEvent,
+                                       identifier: str = "", plan_id: str = ""):
+        """(管理员) 为指定用户开通套餐（不扣余额，等价于后台手动开通）。"""
+        if not self._sub_enabled():
+            yield self._reply(event, self.t("sub.disabled"))
+            return
+        raw_plan = str(plan_id or "").strip()
+        if not raw_plan:
+            yield self._reply(event, self.t("sub.bind.usage"))
+            return
+        plan_no = self._parse_int_safe(raw_plan)
+        if plan_no is None:
+            yield self._reply(event, self.t("sub.plan_invalid", input=raw_plan))
+            return
+
+        site_id, binding, label = await self._resolve_site_target(event, identifier)
+        if site_id is None:
+            yield self._reply(event, self.t("sub.target_not_found", input=label or "-"))
+            return
+
+        # 先确认套餐存在（含停用项，便于给出明确提示与标题回显）
+        status, plans = await self.core.list_subscription_plans(include_disabled=True)
+        if status == "NOT_SUPPORTED":
+            yield self._reply(event, self.t("sub.unsupported"))
+            return
+        if status != "OK":
+            yield self._reply(event, self.t("sub.api_error"))
+            return
+        plan = next((p for p in plans if p.get('id') == plan_no), None)
+        if not plan:
+            yield self._reply(event, self.t("sub.plan_not_found", plan=plan_no))
+            return
+        title = plan.get('title') or f"#{plan_no}"
+        warn = "" if plan.get('enabled', True) else self.t("sub.plan_disabled_warn")
+
+        async with self.core._get_sub_lock(site_id):
+            st, msg = await self.core.bind_subscription(site_id, plan_no)
+            if st == "NOT_SUPPORTED":
+                yield self._reply(event, self.t("sub.unsupported"))
+                return
+            if st != "OK":
+                yield self._reply(event, self.t("sub.bind.failed", site_id=site_id, plan=plan_no, err=msg or "-"))
+                return
+            # 回读确认，避免「接口说成功但记录没出现」
+            chk_status, subs = await self.core.get_user_subscriptions(site_id)
+            confirmed = ""
+            if chk_status == "OK":
+                fresh = [s for s in subs if str(s.get('status', '')).lower() == "active"]
+                if fresh:
+                    confirmed = self.t("sub.bind.confirmed", id=max(
+                        (s.get('id') or 0) for s in fresh
+                    ), status=self._fmt_sub_status("active"))
+
+        extra = msg or ""
+        yield self._reply(event, self.t(
+            "sub.bind.success", target=label, site_id=site_id, plan=plan_no,
+            title=title, extra=(f"\n{extra}" if extra else "") + (f"\n{confirmed}" if confirmed else "") + (f"\n{warn}" if warn else ""),
+        ))
+
+    @filter.command("查套餐")
+    @guard_errors
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def handle_query_subscription(self, event: AstrMessageEvent, identifier: str = ""):
+        """(管理员) 查询指定用户的订阅（含历史）。"""
+        if not self._sub_enabled():
+            yield self._reply(event, self.t("sub.disabled"))
+            return
+        site_id, binding, label = await self._resolve_site_target(event, identifier)
+        if site_id is None:
+            yield self._reply(event, self.t("sub.target_not_found", input=label or "-"))
+            return
+
+        status, subs = await self.core.get_user_subscriptions(site_id)
+        if status == "NOT_SUPPORTED":
+            yield self._reply(event, self.t("sub.unsupported"))
+            return
+        if status != "OK":
+            yield self._reply(event, self.t("sub.api_error"))
+            return
+        if not subs:
+            yield self._reply(event, self.t("sub.list.empty", target=label, site_id=site_id))
+            return
+        ratio = await self.core.get_quota_per_unit() or self.config.get('binding_settings.quota_display_ratio', 500000) or 1
+        lines = "\n".join(self._fmt_sub_line(s, ratio) for s in subs)
+        yield self._reply(event, self.t(
+            "sub.list.header", target=label, site_id=site_id, count=len(subs), lines=lines,
+        ))
+
+    @filter.command("取消套餐")
+    @guard_errors
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def handle_cancel_subscription(self, event: AstrMessageEvent, subscription_id: str = ""):
+        """(管理员) 使指定订阅立即失效（编号见「查套餐」）。"""
+        if not self._sub_enabled():
+            yield self._reply(event, self.t("sub.disabled"))
+            return
+        raw = str(subscription_id or "").strip()
+        if not raw:
+            yield self._reply(event, self.t("sub.cancel.usage"))
+            return
+        sub_no = self._parse_int_safe(raw)
+        if sub_no is None:
+            yield self._reply(event, self.t("sub.cancel.invalid", input=raw))
+            return
+
+        status, msg = await self.core.invalidate_subscription(sub_no)
+        if status == "NOT_SUPPORTED":
+            yield self._reply(event, self.t("sub.unsupported"))
+            return
+        if status != "OK":
+            yield self._reply(event, self.t("sub.cancel.failed", id=sub_no, err=msg or "-"))
+            return
+        yield self._reply(event, self.t("sub.cancel.success", id=sub_no, extra=(f"\n{msg}" if msg else "")))
+
     @filter.command("调整余额")
     @guard_errors
     @filter.permission_type(filter.PermissionType.ADMIN)

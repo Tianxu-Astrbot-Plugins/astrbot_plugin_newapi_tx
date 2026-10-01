@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import math
 import time
 import httpx
 import aiomysql
@@ -39,6 +40,8 @@ class NewApiCore:
         self._red_packet_locks: dict[int, asyncio.Lock] = {}
         # 个人红包按网站账号加锁：串行化「查余额→扣款→建包」，防并发双花
         self._user_rp_locks: dict[str, asyncio.Lock] = {}
+        # 订阅套餐按网站账号加锁：串行化「开通」，防连点并发双开
+        self._sub_locks: dict[str, asyncio.Lock] = {}
         logger.info("[NewAPI Utils] 核心工具类已实例化，等待异步初始化...")
 
     @staticmethod
@@ -1039,6 +1042,188 @@ class NewApiCore:
                 return None
         return None
 
+    # ------------------------------------------------------------------ #
+    #  订阅套餐（New API Subscription Plan）                            #
+    # ------------------------------------------------------------------ #
+
+    async def api_call(self, method: str, endpoint: str,
+                       json_data: Optional[Dict] = None
+                       ) -> Tuple[int, Optional[Dict], str]:
+        """管理员令牌请求，返回 (HTTP 状态码, JSON, 原文)。
+
+        与 api_request 的区别：不吞掉非 2xx，便于把 404（老版 New API 无订阅接口）
+        与其他错误区分开。网络异常返回 (0, None, 异常文本)。
+        """
+        if not self.api_base_url or not self.api_access_token:
+            return 0, None, "API 配置缺失"
+        url = f"{self.api_base_url.rstrip('/')}{endpoint}"
+        headers = {"Authorization": self.api_access_token}
+        logger.info(f"[NewAPI Utils] API 调用: {method} {url}")
+        if json_data:
+            logger.info(f"[NewAPI Utils] 请求体: {json_data}")
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.request(
+                    method, url, headers=headers, json=json_data, timeout=10.0
+                )
+            body = response.text[:500]
+            logger.info(f"[NewAPI Utils] 响应 HTTP {response.status_code}: {body}")
+            try:
+                data = response.json()
+            except Exception:
+                data = None
+            return response.status_code, data, response.text
+        except Exception as e:
+            logger.warning(f"[NewAPI Utils] API 调用异常 {method} {endpoint}: {e}")
+            return 0, None, str(e)
+
+    @staticmethod
+    def _unwrap_plan_list(raw: Any) -> list:
+        """拍平套餐列表：兼容 [{"plan":{...}}] 与 [{...}] 两种包络。"""
+        out = []
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            plan = item.get("plan") if isinstance(item.get("plan"), dict) else item
+            if isinstance(plan, dict) and plan.get("id") is not None:
+                out.append(plan)
+        return out
+
+    @staticmethod
+    def _unwrap_subscription_list(raw: Any) -> list:
+        """拍平订阅列表：兼容 [{"subscription":{...}}] 与 [{...}] 两种包络。"""
+        out = []
+        for item in raw or []:
+            if not isinstance(item, dict):
+                continue
+            sub = item.get("subscription") if isinstance(item.get("subscription"), dict) else item
+            if isinstance(sub, dict):
+                out.append(sub)
+        return out
+
+    async def get_quota_per_unit(self) -> Optional[int]:
+        """匿名接口 GET /api/status 读取站点 QuotaPerUnit（价格/额度换算的权威口径）。"""
+        if not self.api_base_url:
+            return None
+        url = f"{self.api_base_url.rstrip('/')}/api/status"
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.request("GET", url, timeout=10.0)
+            if not response.is_success:
+                return None
+            data = (response.json() or {}).get("data") or {}
+            value = data.get("quota_per_unit")
+            return int(value) if value else None
+        except Exception as e:
+            logger.warning(f"[NewAPI Utils] 读取 quota_per_unit 失败: {e}")
+            return None
+
+    async def list_subscription_plans(self, include_disabled: bool = False
+                                      ) -> Tuple[str, list]:
+        """套餐列表。返回 (状态, 列表)；状态：OK / NOT_SUPPORTED / ERROR。
+
+        include_disabled=True 走管理员接口（含停用套餐），否则走用户接口（仅启用）。
+        """
+        endpoint = "/api/subscription/admin/plans" if include_disabled else "/api/subscription/plans"
+        status, data, text = await self.api_call("GET", endpoint)
+        if status == 404:
+            return "NOT_SUPPORTED", []
+        if status == 0 or not isinstance(data, dict):
+            return "ERROR", []
+        if not data.get("success"):
+            return "ERROR", []
+        plans = self._unwrap_plan_list(data.get("data"))
+        if not include_disabled:
+            plans = [p for p in plans if p.get("enabled", True)]
+        return "OK", plans
+
+    async def get_user_subscriptions(self, user_id: int) -> Tuple[str, list]:
+        """指定用户的订阅列表（含历史）。返回 (状态, 列表)；状态：OK / NOT_SUPPORTED / ERROR。"""
+        status, data, text = await self.api_call(
+            "GET", f"/api/subscription/admin/users/{int(user_id)}/subscriptions"
+        )
+        if status == 404:
+            return "NOT_SUPPORTED", []
+        if status == 0 or not isinstance(data, dict):
+            return "ERROR", []
+        if not data.get("success"):
+            return "ERROR", []
+        payload = data.get("data")
+        if isinstance(payload, dict):
+            payload = payload.get("subscriptions") or payload.get("all_subscriptions") or []
+        return "OK", self._unwrap_subscription_list(payload)
+
+    async def has_active_subscription(self, user_id: int) -> Optional[bool]:
+        """是否存在生效中的订阅。接口不可用返回 None（调用方按「无订阅」处理）。"""
+        status, subs = await self.get_user_subscriptions(user_id)
+        if status != "OK":
+            return None
+        return any(str(s.get("status", "")).lower() == "active" for s in subs)
+
+    async def bind_subscription(self, user_id: int, plan_id: int
+                                ) -> Tuple[str, str]:
+        """管理员直接开通套餐（不扣余额，source=admin）。
+
+        返回 (状态, 站点消息)；状态：OK / NOT_SUPPORTED / ERROR。
+        成功时站点 data 可能是 {"message": "..."} 也可能是 None，两种都处理。
+        """
+        status, data, text = await self.api_call(
+            "POST", "/api/subscription/admin/bind",
+            {"user_id": int(user_id), "plan_id": int(plan_id)}
+        )
+        if status == 404:
+            return "NOT_SUPPORTED", ""
+        if status == 0 or not isinstance(data, dict):
+            return "ERROR", (text or "")[:200]
+        if not data.get("success"):
+            return "ERROR", str(data.get("message") or "")[:200]
+        payload = data.get("data")
+        msg = ""
+        if isinstance(payload, dict):
+            msg = str(payload.get("message") or "")
+        return "OK", msg
+
+    async def invalidate_subscription(self, subscription_id: int) -> Tuple[str, str]:
+        """使订阅立即失效。返回 (状态, 站点消息)；状态：OK / NOT_SUPPORTED / ERROR。"""
+        status, data, text = await self.api_call(
+            "POST",
+            f"/api/subscription/admin/user_subscriptions/{int(subscription_id)}/invalidate"
+        )
+        if status == 404:
+            return "NOT_SUPPORTED", ""
+        if status == 0 or not isinstance(data, dict):
+            return "ERROR", (text or "")[:200]
+        if not data.get("success"):
+            return "ERROR", str(data.get("message") or "")[:200]
+        return "OK", str(data.get("message") or "")
+
+    async def compute_plan_cost_raw(self, plan: Dict) -> Optional[int]:
+        """按站点口径计算套餐价格的原始额度：ceil(price_amount × QuotaPerUnit)。
+
+        QuotaPerUnit 优先取匿名 /api/status 的真实值（与站点计费同源），
+        取不到时回退插件自身的 quota_display_ratio。
+        """
+        try:
+            price = float(plan.get("price_amount") or 0)
+        except (TypeError, ValueError):
+            return None
+        if price <= 0:
+            return 0
+        unit = await self.get_quota_per_unit()
+        if not unit:
+            unit = self.config.get('binding_settings.quota_display_ratio', 500000) or 500000
+        return int(math.ceil(price * float(unit)))
+
+    async def count_active_subscriptions_for_plan(self, user_id: int,
+                                                  plan_id: int) -> Optional[int]:
+        """统计用户当前生效中的指定套餐数量（用于 max_purchase_per_user 前置校验）。"""
+        status, subs = await self.get_user_subscriptions(user_id)
+        if status != "OK":
+            return None
+        return sum(1 for s in subs
+                   if s.get("plan_id") == plan_id
+                   and str(s.get("status", "")).lower() == "active")
+
     async def get_user_token_consumption(self, hours: int = 24) -> Optional[list]:
         """聚合近 N 小时全站消耗日志（type=2），按网站用户 ID 汇总 token 消耗。
 
@@ -1129,6 +1314,13 @@ class NewApiCore:
             self._user_rp_locks[key] = asyncio.Lock()
         return self._user_rp_locks[key]
 
+    def _get_sub_lock(self, website_user_id) -> asyncio.Lock:
+        """获取指定网站账号的订阅开通锁（懒创建；键统一为 str），防连点并发双开。"""
+        key = str(website_user_id)
+        if key not in self._sub_locks:
+            self._sub_locks[key] = asyncio.Lock()
+        return self._sub_locks[key]
+
     async def get_check_in_state(self, website_user_id: int) -> Optional[Dict]:
         """获取指定网站账号的持久化签到状态（按网站用户去重，防止多 QQ 轮流绑同一账号刷礼包与重复签到）。"""
         return await self.execute_query(
@@ -1157,6 +1349,15 @@ class NewApiCore:
             return False
         leave_conf = self.config.get('group_leave_settings', {})
         revert_group = leave_conf.get('revert_group_on_leave', 'default')
+        # 订阅套餐保护：套餐可带 upgrade_group，退群若无条件改回默认组会抹掉套餐权益。
+        # 故先查生效订阅，命中则跳过恢复（接口不可用/失败时按「无订阅」处理，保持原行为）。
+        if self.config.get('subscription_settings.revoke_group_on_leave_skip_subscribed', True):
+            active = await self.has_active_subscription(website_user_id)
+            if active:
+                logger.info(
+                    f"网站用户 {website_user_id} 存在生效中的订阅套餐，退群时跳过用户组恢复以免抹掉套餐权益。"
+                )
+                return True
         if api_user_data.get('group') == revert_group:
             logger.info(f"网站用户 {website_user_id} 已在目标恢复组 {revert_group} 中，无需操作。")
             return True
