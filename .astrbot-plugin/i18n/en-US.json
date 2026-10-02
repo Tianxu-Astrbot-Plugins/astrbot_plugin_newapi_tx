@@ -112,6 +112,7 @@
       "enabled": { "description": "Enable plan commands (套餐 / 购买套餐 / 开通套餐 / 查套餐 / 取消套餐); keep disabled on older New API builds without subscription endpoints" },
       "allow_user_purchase": { "description": "Allow users to self-purchase plans: deduct from their own balance with the admin token, then attach the plan (two-step, auto-refund on failure; no official order record is created)" },
       "enforce_allow_balance_pay": { "description": "Honor the plan's allow_balance_pay switch during user purchase (the site enforces it on its own balance-purchase path, but not on the manual-deduct path)" },
+      "public_url": { "description": "Public website URL (optional, e.g. https://api.example.com) used only for the purchase link in the 套餐 list. When empty, only the relative path /console/subscription is shown — the internal API URL is never exposed to the group" },
       "official_only": { "description": "Plan commands on the official bot only: silently ignore plan commands from the wild bot (numeric QQ identity) to avoid risk-control exposure" },
       "revoke_group_on_leave_skip_subscribed": { "description": "Skip group-revert on member leave for users with an active subscription: plans may carry upgrade_group, and unconditionally reverting the group would wipe the plan benefit" }
     },

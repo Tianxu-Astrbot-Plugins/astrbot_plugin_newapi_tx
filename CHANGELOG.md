@@ -4,6 +4,14 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/)。
 
+## [1.0.52] - 2026-10-01
+
+### 修复
+- 官机上管理员执行 `开通套餐 @用户 [套餐ID]` 报错 `invalid literal for int() with base 10: '<OpenID>'`：官机下 `@` 段落与机器人自身 ID 都是 OpenID 字符串，原解析逻辑用 `int(event.get_self_id())` 做比较导致崩溃。现统一改为字符串比较（新增 `_self_id_str`），官机与野机的 @ 目标均可正确解析；同源崩溃点「打劫 @目标」一并修复。
+
+### 新增
+- 套餐购买入口支持**对外 URL**：新增配置 `subscription_settings.public_url`（选填）。此前 `套餐` 列表的购买入口直接拼接 `api_base_url`，会把内网地址（如 `http://[fd7a:...]:10021`）泄漏到群里；现在仅当配置了对外地址时才展示完整链接，**留空时只显示站内路径 `/console/subscription`**，绝不回退到内网 API 地址；配置值缺少 `http(s)://` 前缀时降级为路径显示并记警告日志。
+
 ## [1.0.51] - 2026-08-27
 
 ### 新增
