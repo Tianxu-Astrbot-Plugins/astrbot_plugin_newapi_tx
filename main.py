@@ -8,11 +8,17 @@ from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-from astrbot.api.message_components import At
+from astrbot.api.message_components import At, Plain
 
 from .newapi_utils import NewApiCore
 from .heist_logic import HeistLogic
+from .futures_logic import FuturesEngine, PriceFeed
 from .i18n import translate
+
+try:  # 主动推送（群播报）所需的链式消息类型；老版本缺失时降级为不播报
+    from astrbot.api.event import MessageChain
+except Exception:  # pragma: no cover
+    MessageChain = None
 
 def load_plugin_version() -> str:
     """
@@ -115,6 +121,9 @@ class NewApiSuitePlugin(Star):
         self.config = config
         self.core = NewApiCore(config)
         self.heist_handler = HeistLogic(config, self.core)
+        # 模拟合约：行情源 + 逐仓业务逻辑 + 后台轮询任务句柄
+        self.futures = FuturesEngine(config, self.core, PriceFeed(config))
+        self._futures_task: Optional[asyncio.Task] = None
         # 回复语言：zh / en（配置 i18n_settings.language）
         self.lang = self._resolve_language()
         # 余额缓存：用户每次操作时顺手更新，排行榜直接读缓存无需查 API
@@ -329,13 +338,86 @@ class NewApiSuitePlugin(Star):
         init_success = await self.core.initialize()
         if init_success:
             logger.info("[NewAPI Suite] 核心服务初始化成功。" )
+            # 模拟合约开启时启动后台轮询（取价 → 止盈止损/强平 → 群播报）
+            if self.futures.enabled() and self._futures_task is None:
+                self._futures_task = asyncio.create_task(self._futures_loop())
+                logger.info("[NewAPI Suite] 模拟合约后台轮询已启动。")
         else:
             logger.error("[NewAPI Suite] 核心服务初始化失败。" )
 
     async def terminate(self):
-        """插件被禁用或重载时调用，清空 KV 绑定缓存。"""
+        """插件被禁用或重载时调用：停掉后台轮询并清空 KV 绑定缓存。"""
+        if self._futures_task is not None:
+            self._futures_task.cancel()
+            try:
+                await self._futures_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._futures_task = None
+            logger.info("[NewAPI Suite] 模拟合约后台轮询已停止。")
         await self.delete_kv_data("binding_cache")
         logger.info("[NewAPI Suite] KV 绑定缓存已清空。")
+
+    async def _futures_loop(self):
+        """模拟合约后台循环：按配置间隔取价并结算，被取消时静默退出。"""
+        await asyncio.sleep(5)  # 启动宽限，避免与初始化抢资源
+        while True:
+            try:
+                conf = self.config.get('futures_settings', {}) or {}
+                interval = max(5, int(conf.get('poll_interval_seconds', 30) or 30))
+            except Exception:
+                interval = 30
+            try:
+                for result in await self.futures.settle_tick():
+                    await self._announce_futures_close(result)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"[模拟合约] 后台结算异常: {e}", exc_info=True)
+            await asyncio.sleep(interval)
+
+    async def _broadcast(self, umo: str, text: str):
+        """向指定会话主动推送消息（爆仓/止盈止损播报）；失败仅记日志，不影响结算。"""
+        if not umo or not text:
+            return
+        send = getattr(self.context, "send_message", None)
+        if send is None or MessageChain is None:
+            logger.warning("[模拟合约] 当前 AstrBot 版本不支持主动推送，跳过群播报。")
+            return
+        try:
+            try:
+                chain = MessageChain().message(text)
+            except Exception:
+                chain = MessageChain([Plain(text)])
+            await send(umo, chain)
+        except Exception as e:
+            logger.warning(f"[模拟合约] 群播报失败（{umo}）: {e}")
+
+    async def _announce_futures_close(self, result: Dict[str, Any]):
+        """自动平仓（强平/止盈/止损）群播报。"""
+        conf = self.config.get('futures_settings', {}) or {}
+        if not conf.get('liquidation_broadcast', True):
+            return
+        key = {"LIQUIDATED": "fut.news.liquidated",
+               "TP": "fut.news.tp", "SL": "fut.news.sl"}.get(str(result.get('reason')))
+        if not key:
+            return
+        ratio = self.futures.ratio()
+        await self._broadcast(result.get('umo') or "", self.t(
+            key,
+            who=self._futures_who(result.get('identity'), result.get('website_user_id')),
+            side=self.t("fut.side.long") if str(result.get('side')).upper() == "LONG" else self.t("fut.side.short"),
+            symbol=result.get('symbol'), leverage=result.get('leverage'),
+            entry=f"{float(result.get('entry') or 0):g}",
+            exit=f"{float(result.get('exit') or 0):g}",
+            pnl=f"{float(result.get('net_raw') or 0) / ratio:.6f}".rstrip('0').rstrip('.'),
+            margin=f"{float(result.get('margin_raw') or 0) / ratio:.6f}".rstrip('0').rstrip('.'),
+        ))
+
+    def _futures_who(self, identity, website_user_id) -> str:
+        """播报中的人物标识：优先身份，缺失时退化为网站ID。"""
+        text = str(identity or "").strip()
+        return text if text else f"网站ID {website_user_id}"
 
 
     @filter.command("pingapi")
@@ -1389,6 +1471,312 @@ class NewApiSuitePlugin(Star):
             yield self._reply(event, self.t("sub.cancel.failed", id=sub_no, err=msg or "-"))
             return
         yield self._reply(event, self.t("sub.cancel.success", id=sub_no, extra=(f"\n{msg}" if msg else "")))
+
+    # --- 模拟合约（逐仓多空，真实行情） ---
+
+    def _futures_umo(self, event: AstrMessageEvent) -> str:
+        """开仓所在会话标识，用于后续爆仓/止盈止损的群播报。"""
+        return str(getattr(event, "unified_msg_origin", "") or "")
+
+    def _fmt_num(self, value, digits: int = 6) -> str:
+        """数字展示：去掉多余尾零，避免 10.000000 这类噪声。"""
+        try:
+            return f"{float(value):.{digits}f}".rstrip('0').rstrip('.')
+        except (TypeError, ValueError):
+            return "-"
+
+    def _fmt_price(self, value) -> str:
+        """价格展示：按量级自适应小数位。"""
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if price >= 1000:
+            return f"{price:,.2f}".rstrip('0').rstrip('.')
+        if price >= 1:
+            return f"{price:.4f}".rstrip('0').rstrip('.')
+        return f"{price:.6f}".rstrip('0').rstrip('.')
+
+    async def _futures_pnl_line(self, pos: Dict, price: Optional[float]) -> str:
+        """单个持仓的展示行（含实时浮盈与收益率）。"""
+        ratio = self.futures.ratio()
+        margin = int(pos['margin_raw'])
+        side_text = self.t("fut.side.long") if str(pos['side']).upper() == "LONG" else self.t("fut.side.short")
+        if price is None:
+            pnl_text = self.t("fut.position.price_stale")
+            roi_text = "-"
+        else:
+            pnl = self.futures.pnl_raw(pos['entry_price'], price, int(pos['notional_raw']), pos['side'])
+            pnl_text = self._fmt_num(pnl / ratio)
+            roi_text = f"{pnl / margin * 100:+.2f}%" if margin else "-"
+        return self.t(
+            "fut.position.line", id=pos['id'], side=side_text, symbol=pos['symbol'],
+            leverage=pos['leverage'], entry=self._fmt_price(pos['entry_price']),
+            price=self._fmt_price(price) if price else "-",
+            margin=self._fmt_num(margin / ratio), pnl=pnl_text, roi=roi_text,
+            liq=self._fmt_price(pos.get('liq_price')),
+        )
+
+    @filter.command("行情")
+    @guard_errors
+    async def handle_futures_quote(self, event: AstrMessageEvent, symbol: str = ""):
+        """查看模拟合约支持的币种与实时行情。"""
+        if not self.futures.enabled():
+            yield self._reply(event, self.t("fut.disabled"))
+            return
+        symbols = self.futures.symbols()
+        raw = str(symbol or "").strip().upper()
+        targets = [raw] if raw else symbols
+        if raw and raw not in symbols:
+            yield self._reply(event, self.t("fut.symbol_invalid", symbol=raw,
+                                            symbols=" / ".join(symbols)))
+            return
+        lines = []
+        for sym in targets:
+            quote = await self.futures.feed.get_quote(sym)
+            if not quote:
+                lines.append(self.t("fut.quote.failed", symbol=sym))
+                continue
+            chg = quote.get('change_pct')
+            chg_text = f"{chg:+.2f}%" if isinstance(chg, (int, float)) else "-"
+            lines.append(self.t("fut.quote.line", symbol=sym,
+                                price=self._fmt_price(quote['price']),
+                                change=chg_text, source=quote.get('source', '-')))
+        yield self._reply(event, self.t(
+            "fut.quote.header", count=len(targets), lines="\n".join(lines),
+            max_leverage=self.futures.max_leverage(),
+        ))
+
+    async def _open_futures(self, event: AstrMessageEvent, side: str, raw_symbol: str,
+                            raw_margin: str, raw_leverage: str,
+                            raw_tp: str = "", raw_sl: str = ""):
+        """开多/开空共用实现。"""
+        if not self.futures.enabled():
+            yield self._reply(event, self.t("fut.disabled"))
+            return
+        symbols = self.futures.symbols()
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol:
+            yield self._reply(event, self.t("fut.open.usage", cmd=self.t(
+                "fut.side.long" if side == "LONG" else "fut.side.short")))
+            return
+        if symbol not in symbols:
+            yield self._reply(event, self.t("fut.symbol_invalid", symbol=symbol,
+                                            symbols=" / ".join(symbols)))
+            return
+        try:
+            margin_display = float(str(raw_margin).strip())
+        except (TypeError, ValueError):
+            yield self._reply(event, self.t("fut.open.margin_invalid", input=raw_margin))
+            return
+        if margin_display <= 0:
+            yield self._reply(event, self.t("fut.open.margin_invalid", input=raw_margin))
+            return
+        leverage = self._parse_int_safe(raw_leverage)
+        if leverage is None:
+            yield self._reply(event, self.t("fut.open.leverage_invalid", input=raw_leverage,
+                                            max=self.futures.max_leverage()))
+            return
+
+        def _price_of(raw: str):
+            raw = str(raw or "").strip()
+            if not raw:
+                return None
+            try:
+                return float(raw)
+            except ValueError:
+                return None
+
+        tp_price = _price_of(raw_tp)
+        sl_price = _price_of(raw_sl)
+        if raw_tp and tp_price is None:
+            yield self._reply(event, self.t("fut.open.tp_invalid", input=raw_tp))
+            return
+        if raw_sl and sl_price is None:
+            yield self._reply(event, self.t("fut.open.sl_invalid", input=raw_sl))
+            return
+
+        ratio = self.futures.ratio()
+        binding = event.binding
+        site_id = int(binding['website_user_id'])
+        identity = str(event.get_sender_id())
+        margin_raw = int(margin_display * ratio)
+
+        status, details = await self.futures.open_position(
+            website_user_id=site_id, identity=identity, symbol=symbol, side=side,
+            margin_raw=margin_raw, leverage=leverage, tp_price=tp_price, sl_price=sl_price,
+            umo=self._futures_umo(event),
+        )
+        if status != "OK":
+            if status == "SYMBOL_INVALID":
+                yield self._reply(event, self.t("fut.symbol_invalid", symbol=symbol,
+                                                symbols=" / ".join(details.get('symbols') or symbols)))
+            elif status == "PRICE_UNAVAILABLE":
+                yield self._reply(event, self.t("fut.price_unavailable", symbol=symbol))
+            elif status == "LEVERAGE_INVALID":
+                yield self._reply(event, self.t("fut.open.leverage_range", max=details.get('max')))
+            elif status == "MARGIN_TOO_SMALL":
+                yield self._reply(event, self.t("fut.open.margin_too_small",
+                                                min=self._fmt_num(details.get('min_display'))))
+            elif status == "TOO_MANY_POSITIONS":
+                yield self._reply(event, self.t("fut.open.too_many", max=details.get('max')))
+            elif status == "INSUFFICIENT":
+                yield self._reply(event, self.t(
+                    "fut.open.insufficient",
+                    need=self._fmt_num(details.get('need_display')),
+                    balance=self._fmt_num(details.get('balance_display'))))
+            elif status == "DEDUCT_FAILED":
+                yield self._reply(event, self.t("fut.open.deduct_failed"))
+            else:
+                yield self._reply(event, self.t("fut.api_error"))
+            return
+
+        side_text = self.t("fut.side.long") if side == "LONG" else self.t("fut.side.short")
+        extra = ""
+        if tp_price:
+            extra += "\n" + self.t("fut.open.tp_set", price=self._fmt_price(tp_price))
+        if sl_price:
+            extra += "\n" + self.t("fut.open.sl_set", price=self._fmt_price(sl_price))
+        self._balance_cache[site_id] = (
+            binding.get('qq_id', binding.get('openid')), details['balance_raw']
+        )
+        yield self._reply(event, self.t(
+            "fut.open.success", id=details['id'], side=side_text, symbol=details['symbol'],
+            leverage=details['leverage'], entry=self._fmt_price(details['entry']),
+            margin=self._fmt_num(details['margin_raw'] / ratio),
+            notional=self._fmt_num(details['notional_raw'] / ratio),
+            fee=self._fmt_num(details['fee_raw'] / ratio),
+            liq=self._fmt_price(details['liq_price']),
+            balance=self._fmt_num(details['balance_raw'] / ratio),
+            extra=extra,
+        ))
+
+    @filter.command("开多")
+    @guard_errors
+    @require_group_whitelist
+    @require_binding
+    async def handle_futures_long(self, event: AstrMessageEvent, symbol: str = "",
+                                  margin: str = "", leverage: str = "",
+                                  tp: str = "", sl: str = ""):
+        """开多（逐仓）：开多 [币种] [保证金] [杠杆] [止盈价] [止损价]"""
+        async for item in self._open_futures(event, "LONG", symbol, margin, leverage, tp, sl):
+            yield item
+
+    @filter.command("开空")
+    @guard_errors
+    @require_group_whitelist
+    @require_binding
+    async def handle_futures_short(self, event: AstrMessageEvent, symbol: str = "",
+                                   margin: str = "", leverage: str = "",
+                                   tp: str = "", sl: str = ""):
+        """开空（逐仓）：开空 [币种] [保证金] [杠杆] [止盈价] [止损价]"""
+        async for item in self._open_futures(event, "SHORT", symbol, margin, leverage, tp, sl):
+            yield item
+
+    @filter.command("持仓")
+    @guard_errors
+    @require_group_whitelist
+    @require_binding
+    async def handle_futures_positions(self, event: AstrMessageEvent):
+        """查看自己的模拟合约持仓与实时浮盈。"""
+        if not self.futures.enabled():
+            yield self._reply(event, self.t("fut.disabled"))
+            return
+        site_id = int(event.binding['website_user_id'])
+        positions = await self.futures.list_positions(site_id, 'OPEN')
+        if not positions:
+            yield self._reply(event, self.t("fut.position.empty"))
+            return
+        prices = await self.futures.feed.get_prices([p['symbol'] for p in positions])
+        lines = []
+        for pos in positions:
+            lines.append(await self._futures_pnl_line(pos, prices.get(str(pos['symbol']).upper())))
+        yield self._reply(event, self.t(
+            "fut.position.header", count=len(positions), lines="\n".join(lines),
+            max_positions=self.futures.max_positions(),
+        ))
+
+    @filter.command("平仓")
+    @guard_errors
+    @require_group_whitelist
+    @require_binding
+    async def handle_futures_close(self, event: AstrMessageEvent, position_id: str = ""):
+        """平仓：平仓 [仓位ID]；不带编号则平掉自己全部仓位。"""
+        if not self.futures.enabled():
+            yield self._reply(event, self.t("fut.disabled"))
+            return
+        site_id = int(event.binding['website_user_id'])
+        ratio = self.futures.ratio()
+
+        raw_id = str(position_id or "").strip()
+        if raw_id:
+            pid = self._parse_int_safe(raw_id)
+            if pid is None:
+                yield self._reply(event, self.t("fut.close.id_invalid", input=raw_id))
+                return
+            pos = await self.futures.get_position(pid)
+            if not pos or int(pos['website_user_id']) != site_id or str(pos['status']) != 'OPEN':
+                yield self._reply(event, self.t("fut.close.not_found", id=pid))
+                return
+            targets = [pos]
+        else:
+            targets = await self.futures.list_positions(site_id, 'OPEN')
+            if not targets:
+                yield self._reply(event, self.t("fut.close.none"))
+                return
+
+        prices = await self.futures.feed.get_prices([p['symbol'] for p in targets])
+        closed, lines = 0, []
+        for pos in targets:
+            price = prices.get(str(pos['symbol']).upper())
+            if not price:
+                lines.append(self.t("fut.close.price_failed", symbol=pos['symbol'], id=pos['id']))
+                continue
+            status, details = await self.futures.close_position(pos, price, "MANUAL")
+            if status != "OK":
+                lines.append(self.t("fut.close.failed", id=pos['id']))
+                continue
+            closed += 1
+            side_text = self.t("fut.side.long") if str(pos['side']).upper() == "LONG" else self.t("fut.side.short")
+            lines.append(self.t(
+                "fut.close.line", id=details['id'], side=side_text, symbol=details['symbol'],
+                leverage=details['leverage'], entry=self._fmt_price(details['entry']),
+                exit=self._fmt_price(details['exit']),
+                payout=self._fmt_num(details['payout_raw'] / ratio),
+                net=("+" if details['net_raw'] >= 0 else "") + self._fmt_num(details['net_raw'] / ratio),
+                reason=self.t("fut.reason.liquidated") if details['liquidated'] else self.t("fut.reason.manual"),
+            ))
+        if not closed:
+            yield self._reply(event, self.t("fut.close.all_failed", lines="\n".join(lines)))
+            return
+        if closed == 1:
+            yield self._reply(event, self.t("fut.close.success", lines="\n".join(lines)))
+            return
+        yield self._reply(event, self.t("fut.close.multi", count=closed, lines="\n".join(lines)))
+
+    @filter.command("合约榜")
+    @guard_errors
+    async def handle_futures_rank(self, event: AstrMessageEvent):
+        """今日模拟合约盈亏榜（按净盈亏，含强平次数）。"""
+        if not self.futures.enabled():
+            yield self._reply(event, self.t("fut.disabled"))
+            return
+        ratio = self.futures.ratio()
+        rows = await self.futures.today_pnl(limit=10)
+        if not rows:
+            yield self._reply(event, self.t("fut.rank.empty"))
+            return
+        medals = ["🥇 ", "🥈 ", "🥉 "]
+        lines = []
+        for i, row in enumerate(rows):
+            prefix = medals[i] if i < 3 else f"{i + 1}. "
+            net = row['net_raw'] / ratio
+            lines.append(self.t(
+                "fut.rank.line", rank=prefix, who=row['identity'],
+                net=("+" if net >= 0 else "") + self._fmt_num(net),
+                trades=row['trades'], liquidations=row['liquidations'],
+            ))
+        yield self._reply(event, self.t("fut.rank.header", lines="\n".join(lines)))
 
     @filter.command("调整余额")
     @guard_errors

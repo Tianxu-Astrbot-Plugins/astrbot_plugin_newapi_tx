@@ -116,6 +116,19 @@
       "official_only": { "description": "Plan commands on the official bot only: silently ignore plan commands from the wild bot (numeric QQ identity) to avoid risk-control exposure" },
       "revoke_group_on_leave_skip_subscribed": { "description": "Skip group-revert on member leave for users with an active subscription: plans may carry upgrade_group, and unconditionally reverting the group would wipe the plan benefit" }
     },
+    "futures_settings": {
+      "description": "Simulated futures (isolated long/short on real market prices; entertainment only, no real trading)",
+      "enabled": { "description": "Enable futures commands (行情 / 开多 / 开空 / 持仓 / 平仓 / 合约榜) and the background settlement loop" },
+      "symbols": { "description": "Supported symbols (quoted in USDT), e.g. BTC / ETH / SOL / DOGE" },
+      "max_leverage": { "description": "Maximum leverage (default 10)" },
+      "max_positions_per_user": { "description": "Max concurrent positions per user (isolated margin; prevents spam opening)" },
+      "min_margin_display": { "description": "Minimum margin per position (display quota)" },
+      "fee_rate": { "description": "Trading fee rate on notional, charged on both open and close (0.0005 = 0.05%)" },
+      "maintenance_margin_rate": { "description": "Maintenance margin rate used to estimate the liquidation price (0.005 = 0.5%)" },
+      "poll_interval_seconds": { "description": "Background settlement interval in seconds (smaller = more realtime but more requests; minimum 5)" },
+      "price_sources": { "description": "Price source fallback order: binance / okx / gate" },
+      "liquidation_broadcast": { "description": "Broadcast liquidation / TP / SL events to the group where the position was opened (requires active-push support in AstrBot)" }
+    },
     "reply_settings": {
       "description": "Reply output",
       "official_markdown": { "description": "Markdown for official-bot replies: requests arriving via the official bot (QQ/OpenID) are sent as QQ native markdown (newlines converted to \\r); wild-bot replies stay plain text. If the official bot lacks native-markdown permission, AstrBot falls back to plain text automatically" }
