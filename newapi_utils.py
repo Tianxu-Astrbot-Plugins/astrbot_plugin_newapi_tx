@@ -322,6 +322,40 @@ class NewApiCore:
             """)
             await self._ensure_column_mysql("newapi_red_packet_records", "grabber_name",
                                             "varchar(128) NULL DEFAULT NULL")
+            await self.execute_query("""
+            CREATE TABLE IF NOT EXISTS `newapi_futures_positions` (
+              `id` int(11) NOT NULL AUTO_INCREMENT,
+              `website_user_id` int(11) NOT NULL,
+              `identity` varchar(64) NOT NULL COMMENT '下单人身份(QQ或OpenID)',
+              `symbol` varchar(16) NOT NULL COMMENT '币种，如 BTC',
+              `side` varchar(8) NOT NULL COMMENT 'LONG / SHORT',
+              `leverage` int(11) NOT NULL,
+              `margin_raw` bigint(20) NOT NULL COMMENT '逐仓保证金(原始额度)',
+              `notional_raw` bigint(20) NOT NULL COMMENT '名义价值=保证金*杠杆',
+              `entry_price` double NOT NULL,
+              `qty` double NOT NULL,
+              `tp_price` double NULL DEFAULT NULL,
+              `sl_price` double NULL DEFAULT NULL,
+              `liq_price` double NULL DEFAULT NULL,
+              `status` varchar(12) NOT NULL DEFAULT 'OPEN' COMMENT 'OPEN/CLOSED/LIQUIDATED',
+              `open_fee_raw` bigint(20) NOT NULL DEFAULT 0,
+              `close_fee_raw` bigint(20) NULL DEFAULT NULL,
+              `close_price` double NULL DEFAULT NULL,
+              `payout_raw` bigint(20) NULL DEFAULT NULL,
+              `pnl_raw` bigint(20) NULL DEFAULT NULL,
+              `pnl_net_raw` bigint(20) NULL DEFAULT NULL,
+              `close_reason` varchar(16) NULL DEFAULT NULL COMMENT 'MANUAL/TP/SL/LIQUIDATED',
+              `open_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `close_at` timestamp NULL DEFAULT NULL,
+              `umo` varchar(128) NULL DEFAULT NULL COMMENT '开仓会话，用于群播报',
+              PRIMARY KEY (`id`),
+              KEY `idx_status` (`status`),
+              KEY `idx_user` (`website_user_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            """)
+            # 兼容早期建表：补齐平仓相关列
+            await self._ensure_column_mysql("newapi_futures_positions", "close_price", "double NULL DEFAULT NULL")
+            await self._ensure_column_mysql("newapi_futures_positions", "payout_raw", "bigint(20) NULL DEFAULT NULL")
             logger.info("[NewAPI Utils] MySQL 数据表结构已确认就绪。")
             return True
         except Exception as e:
@@ -422,6 +456,36 @@ class NewApiCore:
             );
             """)
             await self._ensure_column_sqlite("newapi_red_packet_records", "grabber_name", "TEXT")
+            await self._execute_sqlite("""
+            CREATE TABLE IF NOT EXISTS newapi_futures_positions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              website_user_id INTEGER NOT NULL,
+              identity TEXT NOT NULL,
+              symbol TEXT NOT NULL,
+              side TEXT NOT NULL,
+              leverage INTEGER NOT NULL,
+              margin_raw INTEGER NOT NULL,
+              notional_raw INTEGER NOT NULL,
+              entry_price REAL NOT NULL,
+              qty REAL NOT NULL,
+              tp_price REAL,
+              sl_price REAL,
+              liq_price REAL,
+              status TEXT NOT NULL DEFAULT 'OPEN',
+              open_fee_raw INTEGER NOT NULL DEFAULT 0,
+              close_fee_raw INTEGER,
+              close_price REAL,
+              payout_raw INTEGER,
+              pnl_raw INTEGER,
+              pnl_net_raw INTEGER,
+              close_reason TEXT,
+              open_at TEXT NOT NULL DEFAULT (datetime('now')),
+              close_at TEXT,
+              umo TEXT
+            );
+            """)
+            await self._ensure_column_sqlite("newapi_futures_positions", "close_price", "REAL")
+            await self._ensure_column_sqlite("newapi_futures_positions", "payout_raw", "INTEGER")
             logger.info("[NewAPI Utils] SQLite 数据表结构已确认就绪。")
             return True
         except Exception as e:

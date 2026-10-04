@@ -187,11 +187,28 @@
             "revoke_group_on_leave_skip_subscribed": { "description": "退群恢复用户组时跳过有生效订阅的用户：套餐可能带 upgrade_group，无条件改回默认组会抹掉套餐权益", "type": "bool", "default": true }
         }
     },
+    "futures_settings": {
+        "description": "模拟合约（逐仓多空，用真实行情，仅娱乐不涉及真实交易）",
+        "type": "object",
+        "items": {
+            "enabled": { "description": "是否启用模拟合约命令（行情 / 开多 / 开空 / 持仓 / 平仓 / 合约榜）与后台轮询结算", "type": "bool", "default": false },
+            "symbols": { "description": "支持的币种列表（对 USDT 计价），如 BTC / ETH / SOL / DOGE", "type": "list", "default": ["BTC", "ETH", "SOL", "DOGE"] },
+            "max_leverage": { "description": "最大杠杆倍数（默认 10）", "type": "int", "default": 10 },
+            "max_positions_per_user": { "description": "单用户同时持仓上限（逐仓，防止无限开仓刷屏）", "type": "int", "default": 3 },
+            "min_margin_display": { "description": "单仓最低保证金（显示额度）", "type": "float", "default": 1 },
+            "fee_rate": { "description": "交易手续费率（按名义价值计，开仓与平仓各收一次；0.0005 = 0.05%）", "type": "float", "default": 0.0005 },
+            "maintenance_margin_rate": { "description": "维持保证金率，用于估算强平价（0.005 = 0.5%）", "type": "float", "default": 0.005 },
+            "poll_interval_seconds": { "description": "后台轮询结算间隔（秒），越小越实时但请求越频繁（最小 5 秒）", "type": "int", "default": 30 },
+            "price_sources": { "description": "行情源优先级（依次降级尝试）：binance / okx / gate", "type": "list", "default": ["binance", "okx", "gate"] },
+            "liquidation_broadcast": { "description": "爆仓/止盈/止损时向开仓所在群主动播报（需 AstrBot 支持主动推送）", "type": "bool", "default": true }
+        }
+    },
     "reply_settings": {
         "description": "回复输出",
         "type": "object",
         "items": {
-            "official_markdown": { "description": "官机回复使用Markdown：来自官方机器人(QQ/OpenID)的请求，回复按 QQ 原生 Markdown 发送（换行自动转 \\r）；野机始终保持纯文本。官方机器人无 Markdown 权限时框架自动回退普通文本", "type": "bool", "default": true }
+            "official_markdown": { "description": "官机回复使用Markdown：来自官方机器人(QQ/OpenID)的请求，回复按 QQ 原生 Markdown 发送（换行自动转 \\r）；野机始终保持纯文本。官方机器人无 Markdown 权限时框架自动回退普通文本", "type": "bool", "default": true },
+            "disclaimer": { "description": "免责声明：自动追加到插件的每条回复与主动播报末尾（留空则不追加）。示例：⚠️ 本插件为第三方工具，玩法均为模拟娱乐，不构成任何投资建议，使用风险自负", "type": "string", "default": "⚠️ 本插件为第三方非官方工具，所有玩法均为模拟娱乐，不构成任何投资建议；数据以网站后台为准，使用风险自负。" }
         }
     },
     "red_packet_settings": {
