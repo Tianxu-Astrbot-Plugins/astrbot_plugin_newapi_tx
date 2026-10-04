@@ -196,7 +196,7 @@
             "max_leverage": { "description": "最大杠杆倍数（默认 10）", "type": "int", "default": 10 },
             "max_positions_per_user": { "description": "单用户同时持仓上限（逐仓，防止无限开仓刷屏）", "type": "int", "default": 3 },
             "min_margin_display": { "description": "单仓最低保证金（显示额度）", "type": "float", "default": 1 },
-            "fee_rate": { "description": "交易手续费率（按名义价值计，开仓与平仓各收一次；0.0005 = 0.05%）", "type": "float", "default": 0.0005 },
+            "fee_rate": { "description": "交易手续费率（按名义价值计，开仓与平仓各收一次；0.0005 = 0.05%；下限为精度最小数值 1，填 0 才免收）", "type": "float", "default": 0.0005 },
             "maintenance_margin_rate": { "description": "维持保证金率，用于估算强平价（0.005 = 0.5%）", "type": "float", "default": 0.005 },
             "poll_interval_seconds": { "description": "后台轮询结算间隔（秒），越小越实时但请求越频繁（最小 5 秒）", "type": "int", "default": 30 },
             "price_sources": { "description": "行情源优先级（依次降级尝试）：binance / okx / gate", "type": "list", "default": ["binance", "okx", "gate"] },
