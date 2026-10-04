@@ -131,7 +131,8 @@
     },
     "reply_settings": {
       "description": "Reply output",
-      "official_markdown": { "description": "Markdown for official-bot replies: requests arriving via the official bot (QQ/OpenID) are sent as QQ native markdown (newlines converted to \\r); wild-bot replies stay plain text. If the official bot lacks native-markdown permission, AstrBot falls back to plain text automatically" }
+      "official_markdown": { "description": "Markdown for official-bot replies: requests arriving via the official bot (QQ/OpenID) are sent as QQ native markdown (newlines converted to \\r); wild-bot replies stay plain text. If the official bot lacks native-markdown permission, AstrBot falls back to plain text automatically" },
+      "disclaimer": { "description": "Disclaimer appended to every plugin reply and broadcast (leave empty to disable). Example: ⚠️ Third-party tool; all gameplay is simulated entertainment, not investment advice — use at your own risk." }
     },
     "red_packet_settings": {
       "description": "Red packets (lucky-grab, minted by admins)",

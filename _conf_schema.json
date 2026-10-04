@@ -207,7 +207,8 @@
         "description": "回复输出",
         "type": "object",
         "items": {
-            "official_markdown": { "description": "官机回复使用Markdown：来自官方机器人(QQ/OpenID)的请求，回复按 QQ 原生 Markdown 发送（换行自动转 \\r）；野机始终保持纯文本。官方机器人无 Markdown 权限时框架自动回退普通文本", "type": "bool", "default": true }
+            "official_markdown": { "description": "官机回复使用Markdown：来自官方机器人(QQ/OpenID)的请求，回复按 QQ 原生 Markdown 发送（换行自动转 \\r）；野机始终保持纯文本。官方机器人无 Markdown 权限时框架自动回退普通文本", "type": "bool", "default": true },
+            "disclaimer": { "description": "免责声明：自动追加到插件的每条回复与主动播报末尾（留空则不追加）。示例：⚠️ 本插件为第三方工具，玩法均为模拟娱乐，不构成任何投资建议，使用风险自负", "type": "string", "default": "⚠️ 本插件为第三方非官方工具，所有玩法均为模拟娱乐，不构成任何投资建议；数据以网站后台为准，使用风险自负。" }
         }
     },
     "red_packet_settings": {

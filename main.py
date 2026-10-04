@@ -201,9 +201,25 @@ class NewApiSuitePlugin(Star):
             return text
         return text.replace("\n", "\r")
 
+    def _with_disclaimer(self, text: str) -> str:
+        """给回复追加免责声明（reply_settings.disclaimer，留空即关闭）。
+
+        已包含同一声明时不再重复追加，避免拼接后出现两遍。
+        """
+        if not isinstance(text, str) or not text:
+            return text
+        try:
+            conf = self.config.get('reply_settings', {}) or {}
+        except Exception:
+            return text
+        note = str(conf.get('disclaimer') or "").strip()
+        if not note or note in text:
+            return text
+        return f"{text}\n\n{note}"
+
     def _reply(self, event: AstrMessageEvent, text):
-        """统一回复出口：所有用户可见回复经此发出，便于按来源套用格式。"""
-        return event.plain_result(self._maybe_markdown(event, text))
+        """统一回复出口：所有用户可见回复经此发出，自动附带免责声明并按来源套用格式。"""
+        return event.plain_result(self._maybe_markdown(event, self._with_disclaimer(text)))
 
     def _red_packet_official_only_blocked(self, event: AstrMessageEvent, cmd: str = "") -> bool:
         """「红包仅官机」开启且本次请求来自野机（数字 QQ 身份）时返回 True，调用方应拒绝处理。
@@ -380,6 +396,7 @@ class NewApiSuitePlugin(Star):
         """向指定会话主动推送消息（爆仓/止盈止损播报）；失败仅记日志，不影响结算。"""
         if not umo or not text:
             return
+        text = self._with_disclaimer(text)   # 主动播报同样附带免责声明
         send = getattr(self.context, "send_message", None)
         if send is None or MessageChain is None:
             logger.warning("[模拟合约] 当前 AstrBot 版本不支持主动推送，跳过群播报。")
