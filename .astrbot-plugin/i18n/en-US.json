@@ -123,7 +123,7 @@
       "max_leverage": { "description": "Maximum leverage (default 10)" },
       "max_positions_per_user": { "description": "Max concurrent positions per user (isolated margin; prevents spam opening)" },
       "min_margin_display": { "description": "Minimum margin per position (display quota)" },
-      "fee_rate": { "description": "Trading fee rate on notional, charged on both open and close (0.0005 = 0.05%)" },
+      "fee_rate": { "description": "Trading fee rate on notional, charged on both open and close (0.0005 = 0.05%; floored at 1 smallest quota unit, set 0 to waive)" },
       "maintenance_margin_rate": { "description": "Maintenance margin rate used to estimate the liquidation price (0.005 = 0.5%)" },
       "poll_interval_seconds": { "description": "Background settlement interval in seconds (smaller = more realtime but more requests; minimum 5)" },
       "price_sources": { "description": "Price source fallback order: binance / okx / gate" },

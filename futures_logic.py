@@ -218,11 +218,21 @@ class FuturesEngine:
 
     @staticmethod
     def _fee_raw(notional_raw: int, rate: float) -> int:
-        """手续费：同样四舍五入，避免截断导致的手续费偏漏。"""
+        """手续费：四舍五入（避免截断偏漏），且**下限取精度最小数值 1**。
+
+        额度是整数最小精度单位，费率再小也不应算出 0：极小仓位若手续费为 0，
+        等于「免费开平」，长期会被刷量。故只要名义价值与费率都大于 0，最少收 1
+        （与红包分片的 `max(1, ...)` 约定一致）；费率为 0（用户主动关闭手续费）
+        或名义价值非法时仍返回 0。
+        """
         try:
-            return int(round(float(notional_raw) * float(rate)))
+            notional = float(notional_raw)
+            rate = float(rate)
         except (TypeError, ValueError):
             return 0
+        if notional <= 0 or rate <= 0:
+            return 0
+        return max(1, int(round(notional * rate)))
 
     def settle_amounts(self, position: Dict[str, Any], price: float) -> Dict[str, int]:
         """按现价结清某仓位：返回毛盈亏、平仓手续费、应退金额（逐仓下限为 0）。"""

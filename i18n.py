@@ -534,4 +534,3 @@ def translate(lang: str, key: str, **kwargs):
     if key in _ERROR_KEYS:
         msg += _ISSUE_FOOTER_ZH if lang_key == "zh" else _ISSUE_FOOTER_EN
     return msg
-    return msg
